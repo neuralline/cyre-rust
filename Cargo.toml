@@ -1,0 +1,24 @@
+[package]
+name = "cyre-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Updated to latest versions as of 2025
+tokio = { version = "1.45", features = ["full"] }
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.133"
+
+[dev-dependencies]
+tokio-test = "0.4.4"
+
+# Optional: For performance benchmarks
+[dev-dependencies.criterion]
+version = "0.5.1"
+features = ["html_reports"]
+
+
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
