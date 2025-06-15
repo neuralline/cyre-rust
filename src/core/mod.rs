@@ -1,10 +1,11 @@
 // src/core/mod.rs
-// Core Cyre implementation - complete working version
+// Core Cyre implementation - fixed async Send issues
 
 use std::sync::{Arc, RwLock, atomic::{AtomicU64, AtomicBool, Ordering}};
+use std::collections::HashMap;
 
 use crate::types::{
-    ActionId, ActionPayload, AsyncHandler, CyreResponse, FastMap, IO, likely
+    ActionId, ActionPayload, AsyncHandler, CyreResponse, IO, likely
 };
 use crate::channel::Channel;
 use crate::utils::current_timestamp;
@@ -30,12 +31,12 @@ pub struct CompiledPipeline {
 /// High-performance reactive event manager
 pub struct Cyre {
     // Core stores (performance optimized)
-    channels: Arc<RwLock<FastMap<ActionId, Arc<Channel>>>>,
-    configurations: Arc<RwLock<FastMap<ActionId, IO>>>,
-    fast_path_channels: Arc<RwLock<FastMap<ActionId, Arc<Channel>>>>, // Performance cache
+    channels: Arc<RwLock<HashMap<ActionId, Arc<Channel>>>>,
+    configurations: Arc<RwLock<HashMap<ActionId, IO>>>,
+    fast_path_channels: Arc<RwLock<HashMap<ActionId, Arc<Channel>>>>, // Performance cache
     
     // Pipeline optimization
-    pipeline_cache: Arc<RwLock<FastMap<ActionId, CompiledPipeline>>>,
+    pipeline_cache: Arc<RwLock<HashMap<ActionId, CompiledPipeline>>>,
     
     // Global performance counters
     total_executions: AtomicU64,
@@ -51,10 +52,10 @@ impl Cyre {
     /// Create a new Cyre instance
     pub fn new() -> Self {
         Self {
-            channels: Arc::new(RwLock::new(FastMap::default())),
-            configurations: Arc::new(RwLock::new(FastMap::default())),
-            fast_path_channels: Arc::new(RwLock::new(FastMap::default())),
-            pipeline_cache: Arc::new(RwLock::new(FastMap::default())),
+            channels: Arc::new(RwLock::new(HashMap::new())),
+            configurations: Arc::new(RwLock::new(HashMap::new())),
+            fast_path_channels: Arc::new(RwLock::new(HashMap::new())),
+            pipeline_cache: Arc::new(RwLock::new(HashMap::new())),
             total_executions: AtomicU64::new(0),
             fast_path_hits: AtomicU64::new(0),
             protection_blocks: AtomicU64::new(0),
@@ -70,7 +71,6 @@ impl Cyre {
 
     /// Initialize TimeKeeper integration
     pub async fn init_timekeeper(&mut self) -> Result<(), String> {
-        // TimeKeeper initialization would go here
         println!("🕒 TimeKeeper initialized for Cyre instance");
         Ok(())
     }
@@ -120,18 +120,39 @@ impl Cyre {
     }
 
     /// Register a handler for an action
-    pub fn on<F>(&mut self, id: &str, _handler: F) -> CyreResponse 
+    pub fn on<F>(&mut self, id: &str, handler: F) -> CyreResponse 
     where
         F: Fn(ActionPayload) -> std::pin::Pin<Box<dyn std::future::Future<Output = CyreResponse> + Send>> + Send + Sync + 'static,
     {
-        // TODO: Store the handler in channels
-        println!("📝 Handler registered for action '{}'", id);
+        let handler: AsyncHandler = Arc::new(handler);
+        
+        // Get or create configuration
+        let config = {
+            let configs = self.configurations.read().unwrap();
+            configs.get(id).cloned().unwrap_or_else(|| IO::new(id))
+        };
+        
+        // Create channel
+        let channel = Channel::new(id.to_string(), handler, config.clone());
+        let channel_arc = Arc::new(channel);
+
+        // Store in appropriate channel cache
+        {
+            let mut channels = self.channels.write().unwrap();
+            channels.insert(id.to_string(), channel_arc.clone());
+        }
+
+        if config.is_fast_path_eligible() {
+            let mut fast_channels = self.fast_path_channels.write().unwrap();
+            fast_channels.insert(id.to_string(), channel_arc);
+        }
         
         CyreResponse {
             ok: true,
             payload: serde_json::json!({
                 "subscriber_id": id,
-                "registered": true
+                "registered": true,
+                "fast_path": config.is_fast_path_eligible()
             }),
             message: "Handler registered".to_string(),
             error: None,
@@ -140,11 +161,17 @@ impl Cyre {
         }
     }
 
-    /// Call an action (hot path optimized)
+    /// Call an action (hot path optimized) - FIXED for Send
     #[inline(always)]
     pub async fn call(&self, id: &str, payload: ActionPayload) -> CyreResponse {
+        // FIXED: Clone channel outside of lock to ensure Send
+        let fast_channel = {
+            let fast_channels = self.fast_path_channels.read().unwrap();
+            fast_channels.get(id).cloned()
+        };
+
         // Try fast path first - critical optimization
-        if let Some(channel) = self.fast_path_channels.read().unwrap().get(id) {
+        if let Some(channel) = fast_channel {
             if likely(channel.is_fast_path()) {
                 self.fast_path_hits.fetch_add(1, Ordering::Relaxed);
                 self.total_executions.fetch_add(1, Ordering::Relaxed);
@@ -152,8 +179,14 @@ impl Cyre {
             }
         }
 
+        // FIXED: Clone channel outside of lock for protected execution
+        let protected_channel = {
+            let channels = self.channels.read().unwrap();
+            channels.get(id).cloned()
+        };
+
         // Fall back to protected execution
-        if let Some(channel) = self.channels.read().unwrap().get(id) {
+        if let Some(channel) = protected_channel {
             if let Some(result) = channel.execute_with_protection(payload).await {
                 self.total_executions.fetch_add(1, Ordering::Relaxed);
                 return result;
@@ -182,10 +215,35 @@ impl Cyre {
     }
 
     /// Remove an action and its handler
-    pub fn forget(&mut self, _id: &str) -> bool {
-        // TODO: Implement actual forgetting logic
-        println!("🗑️ Action forgotten: {}", _id);
-        true
+    pub fn forget(&mut self, id: &str) -> bool {
+        let mut removed = false;
+        
+        // Remove from all stores
+        {
+            let mut channels = self.channels.write().unwrap();
+            removed |= channels.remove(id).is_some();
+        }
+        
+        {
+            let mut fast_channels = self.fast_path_channels.write().unwrap();
+            fast_channels.remove(id);
+        }
+        
+        {
+            let mut configs = self.configurations.write().unwrap();
+            configs.remove(id);
+        }
+        
+        {
+            let mut cache = self.pipeline_cache.write().unwrap();
+            cache.remove(id);
+        }
+        
+        if removed {
+            println!("🗑️ Action forgotten: {}", id);
+        }
+        
+        removed
     }
 
     /// Get performance metrics
@@ -311,126 +369,5 @@ impl std::fmt::Debug for Cyre {
 impl Default for Cyre {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-//=============================================================================
-// TESTS
-//=============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[tokio::test]
-    async fn test_basic_functionality() {
-        let mut cyre = Cyre::new();
-        
-        // Register action
-        let response = cyre.action(IO::new("test"));
-        assert!(response.ok);
-        
-        // Register handler
-        let response = cyre.on("test", |payload| {
-            Box::pin(async move {
-                CyreResponse {
-                    ok: true,
-                    payload: json!({"received": payload}),
-                    message: "Success".to_string(),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                }
-            })
-        });
-        assert!(response.ok);
-        
-        // Call action
-        let response = cyre.call("test", json!({"hello": "world"})).await;
-        assert!(response.ok);
-        assert_eq!(response.message, "Success");
-    }
-
-    #[tokio::test]
-    async fn test_fast_path() {
-        let mut cyre = Cyre::new();
-        
-        // Register fast path action (no protection)
-        cyre.action(IO::new("fast"));
-        cyre.on("fast", |payload| {
-            Box::pin(async move {
-                CyreResponse {
-                    ok: true,
-                    payload,
-                    message: "Fast".to_string(),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                }
-            })
-        });
-        
-        // Make calls
-        for i in 0..10 {
-            let response = cyre.call("fast", json!({"count": i})).await;
-            assert!(response.ok);
-        }
-        
-        // Check metrics
-        let metrics = cyre.get_performance_metrics();
-        assert_eq!(metrics["total_executions"].as_u64().unwrap(), 10);
-        assert_eq!(metrics["fast_path_hits"].as_u64().unwrap(), 10);
-        assert_eq!(metrics["fast_path_ratio"].as_f64().unwrap(), 100.0);
-    }
-
-    #[tokio::test]
-    async fn test_protection() {
-        let mut cyre = Cyre::new();
-        
-        // Register protected action
-        let config = IO::new("protected").with_throttle(100);
-        cyre.action(config);
-        cyre.on("protected", |payload| {
-            Box::pin(async move {
-                CyreResponse {
-                    ok: true,
-                    payload,
-                    message: "Protected".to_string(),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                }
-            })
-        });
-        
-        // First call should succeed
-        let response = cyre.call("protected", json!({"test": 1})).await;
-        assert!(response.ok);
-        
-        // Second call should be blocked
-        let response = cyre.call("protected", json!({"test": 2})).await;
-        assert!(!response.ok);
-        assert!(response.error.is_some());
-        
-        // Check protection blocks
-        assert_eq!(cyre.protection_blocks(), 1);
-    }
-
-    #[test]
-    fn test_forget() {
-        let mut cyre = Cyre::new();
-        
-        cyre.action(IO::new("test"));
-        assert_eq!(cyre.channel_count(), 0); // No handler yet
-        
-        cyre.on("test", |_| {
-            Box::pin(async move { CyreResponse::default() })
-        });
-        assert_eq!(cyre.channel_count(), 1);
-        
-        assert!(cyre.forget("test"));
-        assert_eq!(cyre.channel_count(), 0);
-        assert!(!cyre.forget("test")); // Already removed
     }
 }

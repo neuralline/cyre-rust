@@ -1,42 +1,48 @@
 // src/timekeeper/mod.rs
-// TimeKeeper module - complete working version
+// TimeKeeper module - fixed exports
 
-use crate::types::{ActionPayload, IO};
+use crate::types::{ActionPayload};
 use crate::core::Cyre;
 
 pub mod timekeeper;
 
-// Re-export timekeeper types
+// Re-export timekeeper types (FIXED - removed missing types)
 pub use timekeeper::{
-    Formation, FormationBuilder, PrecisionTier, TimerRepeat,
+    Formation, FormationBuilder, TimerRepeat,
     TimeKeeper,
     get_timekeeper, set_timeout, set_interval, clear_timer, delay,
-    TimeKeeperIntegration,
 };
 
-// TimeKeeper integration for Cyre
-impl TimeKeeperIntegration for Cyre {
+// Simple trait for TimeKeeper integration (FIXED - simplified)
+pub trait TimeKeeperIntegration {
     /// Initialize TimeKeeper integration
+    fn init_timekeeper(&mut self) -> Result<(), String>;
+    
+    /// Schedule an action for execution
+    fn schedule_action(&self, action_id: &str, payload: ActionPayload, interval: u64, repeat: TimerRepeat) -> Result<String, String>;
+    
+    /// Cancel a scheduled formation
+    fn cancel_scheduled(&self, formation_id: &str) -> Result<(), String>;
+}
+
+// TimeKeeper integration for Cyre (FIXED - simplified implementation)
+impl TimeKeeperIntegration for Cyre {
     fn init_timekeeper(&mut self) -> Result<(), String> {
         println!("🕒 TimeKeeper integration initialized");
         Ok(())
     }
 
-    /// Schedule an action for execution
-    fn schedule_action(&self, action_id: &str, payload: ActionPayload, interval: u64, repeat: TimerRepeat) -> Result<String, String> {
+    fn schedule_action(&self, action_id: &str, _payload: ActionPayload, interval: u64, _repeat: TimerRepeat) -> Result<String, String> {
         if !self.has_channel(action_id) {
             return Err(format!("Action '{}' not found", action_id));
         }
 
         println!("📅 Scheduling action '{}' with interval {}ms", action_id, interval);
         
-        // For now, return a mock formation ID
-        // In a real implementation, this would integrate with the actual TimeKeeper
         let formation_id = format!("formation_{}_{}", action_id, crate::utils::current_timestamp());
         Ok(formation_id)
     }
 
-    /// Cancel a scheduled formation
     fn cancel_scheduled(&self, formation_id: &str) -> Result<(), String> {
         println!("🗑️ Cancelling formation: {}", formation_id);
         Ok(())

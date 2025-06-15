@@ -1,12 +1,12 @@
 // src/timekeeper/timekeeper.rs - FIXED VERSION
-// TimeKeeper using centralized timeline store
+// Simplified TimeKeeper without missing dependencies
 
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use crate::types::{ActionPayload, Priority};
 use crate::utils::current_timestamp;
 
 //=============================================================================
-// FORMATION TYPES (Updated for centralized state)
+// FORMATION TYPES
 //=============================================================================
 
 /// Timer repeat configuration
@@ -17,7 +17,7 @@ pub enum TimerRepeat {
     Count(u64),
 }
 
-/// Formation represents a scheduled action execution (matches Timer interface)
+/// Formation represents a scheduled action execution
 #[derive(Debug, Clone)]
 pub struct Formation {
     pub id: String,
@@ -31,16 +31,6 @@ pub struct Formation {
     pub next_execution: u64,
     pub execution_count: u64,
     pub is_active: bool,
-    
-    // Match Timer interface from state.ts
-    pub start_time: u64,
-    pub duration: u64,
-    pub original_duration: u64,
-    pub callback: Option<String>, // Store action_id instead of function
-    pub last_execution_time: u64,
-    pub next_execution_time: u64,
-    pub status: String, // "active", "paused", "completed"
-    pub has_executed_once: bool,
 }
 
 impl Formation {
@@ -57,8 +47,8 @@ impl Formation {
         let next_time = now + delay.unwrap_or(interval);
         
         Self {
-            id: id.clone(),
-            action_id: action_id.clone(),
+            id,
+            action_id,
             payload,
             interval,
             repeat,
@@ -68,31 +58,21 @@ impl Formation {
             next_execution: next_time,
             execution_count: 0,
             is_active: true,
-            
-            // Timer interface compatibility
-            start_time: now,
-            duration: interval,
-            original_duration: interval,
-            callback: Some(action_id),
-            last_execution_time: 0,
-            next_execution_time: next_time,
-            status: "active".to_string(),
-            has_executed_once: false,
         }
     }
 }
 
 //=============================================================================
-// CENTRALIZED TIMEKEEPER (No local state!)
+// SIMPLIFIED TIMEKEEPER (No external dependencies)
 //=============================================================================
 
-/// TimeKeeper that uses centralized timeline store
+/// TimeKeeper for scheduling actions
 #[derive(Debug)]
 pub struct TimeKeeper {
-    // ✅ NO local state - everything goes through centralized stores
     total_formations: AtomicU64,
     active_formations: AtomicU64,
     is_running: std::sync::atomic::AtomicBool,
+    formations: Arc<std::sync::Mutex<std::collections::HashMap<String, Formation>>>,
 }
 
 impl TimeKeeper {
@@ -101,126 +81,96 @@ impl TimeKeeper {
             total_formations: AtomicU64::new(0),
             active_formations: AtomicU64::new(0),
             is_running: std::sync::atomic::AtomicBool::new(false),
+            formations: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
-    /// Schedule a formation using centralized timeline store
+    /// Schedule a formation
     pub async fn schedule_formation(&self, formation: Formation) -> Result<(), String> {
         let formation_id = formation.id.clone();
         
-        // ✅ Use centralized timeline store
+        // Store formation
         {
-            let timeline = crate::context::state::timeline;
-            
-            // Convert Formation to Timer for timeline store
-            let timer = crate::types::Timer {
-                id: formation.id.clone(),
-                start_time: formation.start_time,
-                duration: formation.duration,
-                original_duration: formation.original_duration,
-                callback: Box::pin(async move {
-                    // This will trigger actual Cyre action execution
-                    self.execute_formation_action(&formation.action_id, formation.payload.clone()).await
-                }),
-                repeat: match formation.repeat {
-                    TimerRepeat::Once => Some(1),
-                    TimerRepeat::Forever => Some(-1),
-                    TimerRepeat::Count(n) => Some(n as i32),
-                },
-                execution_count: formation.execution_count,
-                last_execution_time: formation.last_execution_time,
-                next_execution_time: formation.next_execution_time,
-                is_in_recuperation: false,
-                status: formation.status.clone(),
-                is_active: formation.is_active,
-                delay: formation.delay,
-                interval: Some(formation.interval),
-                has_executed_once: formation.has_executed_once,
-                priority: formation.priority,
-                // Add any other Timer fields...
-                metrics: None, // Initialize with default metrics
-            };
-            
-            timeline.add(timer);
+            let mut formations = self.formations.lock().unwrap();
+            formations.insert(formation_id.clone(), formation);
         }
         
         self.total_formations.fetch_add(1, Ordering::Relaxed);
         self.active_formations.fetch_add(1, Ordering::Relaxed);
         
-        // ✅ TimeKeeper itself starts the timeline ticker if needed
+        // Start ticker if needed
         if !self.is_running.load(Ordering::Relaxed) {
-            self.start_timeline_ticker().await;
+            self.start_ticker().await;
         }
         
+        println!("📅 Formation {} scheduled", formation_id);
         Ok(())
     }
 
-    /// Start the timeline ticker (centralized timing)
-    async fn start_timeline_ticker(&self) {
+    /// Start the execution ticker
+    async fn start_ticker(&self) {
         if self.is_running.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            let formations = Arc::clone(&self.formations);
+            
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(10));
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
                 
                 loop {
                     interval.tick().await;
                     
                     let now = current_timestamp();
+                    let mut to_execute = Vec::new();
                     
-                    // ✅ Get active timers from centralized timeline store
-                    let active_timers = {
-                        let timeline = crate::context::state::timeline;
-                        timeline.getActive()
-                    };
-                    
-                    let mut executed_any = false;
-                    
-                    for timer in active_timers {
-                        if timer.is_active && now >= timer.next_execution_time {
-                            // Execute the timer callback (which calls Cyre action)
-                            let callback = timer.callback;
-                            tokio::spawn(async move {
-                                callback().await;
-                            });
-                            
-                            // Update timer for next execution
-                            let mut updated_timer = timer.clone();
-                            updated_timer.execution_count += 1;
-                            updated_timer.last_execution_time = now;
-                            updated_timer.has_executed_once = true;
-                            
-                            // Handle repeat logic
-                            match updated_timer.repeat {
-                                Some(1) => {
-                                    // Execute once, then deactivate
-                                    updated_timer.is_active = false;
-                                    updated_timer.status = "completed".to_string();
-                                },
-                                Some(-1) => {
-                                    // Repeat forever
-                                    updated_timer.next_execution_time = now + updated_timer.duration;
-                                },
-                                Some(n) if n > 1 => {
-                                    // Repeat n times
-                                    updated_timer.repeat = Some(n - 1);
-                                    updated_timer.next_execution_time = now + updated_timer.duration;
-                                },
-                                _ => {
-                                    // Complete
-                                    updated_timer.is_active = false;
-                                    updated_timer.status = "completed".to_string();
-                                }
+                    // Check for due formations
+                    {
+                        let formations_guard = formations.lock().unwrap();
+                        for formation in formations_guard.values() {
+                            if formation.is_active && now >= formation.next_execution {
+                                to_execute.push(formation.clone());
                             }
-                            
-                            // ✅ Update centralized timeline store
-                            let timeline = crate::context::state::timeline;
-                            timeline.add(updated_timer);
-                            
-                            executed_any = true;
                         }
                     }
                     
-                    // Stop ticker if no active formations
-                    if !executed_any && active_timers.is_empty() {
+                    // Execute due formations
+                    for mut formation in to_execute {
+                        println!("⏰ Executing formation: {}", formation.id);
+                        
+                        formation.execution_count += 1;
+                        formation.next_execution = now + formation.interval;
+                        
+                        // Handle repeat logic
+                        match formation.repeat {
+                            TimerRepeat::Once => {
+                                formation.is_active = false;
+                            },
+                            TimerRepeat::Forever => {
+                                // Continue running
+                            },
+                            TimerRepeat::Count(count) => {
+                                if formation.execution_count >= count {
+                                    formation.is_active = false;
+                                }
+                            }
+                        }
+                        
+                        // Update stored formation
+                        {
+                            let mut formations_guard = formations.lock().unwrap();
+                            if formation.is_active {
+                                formations_guard.insert(formation.id.clone(), formation);
+                            } else {
+                                formations_guard.remove(&formation.id);
+                            }
+                        }
+                    }
+                    
+                    // Check if we should stop
+                    let active_count = {
+                        let formations_guard = formations.lock().unwrap();
+                        formations_guard.values().filter(|f| f.is_active).count()
+                    };
+                    
+                    if active_count == 0 {
                         break;
                     }
                 }
@@ -228,26 +178,11 @@ impl TimeKeeper {
         }
     }
 
-    /// Execute formation action through Cyre (integration point)
-    async fn execute_formation_action(&self, action_id: &str, payload: ActionPayload) {
-        // ✅ This is where TimeKeeper integrates with Cyre
-        // Need access to Cyre instance to call the action
-        
-        println!("⏰ TimeKeeper executing action: {} with payload: {}", action_id, payload);
-        
-        // TODO: Get Cyre instance and call the action
-        // This requires passing Cyre reference to TimeKeeper
-        // OR using a global/static Cyre instance
-        // OR using a callback registration system
-    }
-
     /// Cancel a scheduled formation
     pub async fn cancel_formation(&self, formation_id: &str) -> Result<(), String> {
-        // ✅ Use centralized timeline store
-        let timeline = crate::context::state::timeline;
-        let success = timeline.forget(formation_id);
+        let mut formations = self.formations.lock().unwrap();
         
-        if success {
+        if formations.remove(formation_id).is_some() {
             self.active_formations.fetch_sub(1, Ordering::Relaxed);
             Ok(())
         } else {
@@ -255,102 +190,37 @@ impl TimeKeeper {
         }
     }
 
-    /// Get formation status from centralized store
+    /// Get formation status
     pub async fn get_formation_status(&self, formation_id: &str) -> Option<Formation> {
-        let timeline = crate::context::state::timeline;
-        
-        if let Some(timer) = timeline.get(formation_id) {
-            // Convert Timer back to Formation
-            Some(Formation {
-                id: timer.id.clone(),
-                action_id: timer.callback.unwrap_or_else(|| "unknown".to_string()),
-                payload: serde_json::Value::Null, // Payload not stored in Timer
-                interval: timer.duration,
-                repeat: match timer.repeat {
-                    Some(-1) => TimerRepeat::Forever,
-                    Some(1) => TimerRepeat::Once,
-                    Some(n) if n > 1 => TimerRepeat::Count(n as u64),
-                    _ => TimerRepeat::Once,
-                },
-                delay: timer.delay,
-                priority: timer.priority,
-                created_at: timer.start_time,
-                next_execution: timer.next_execution_time,
-                execution_count: timer.execution_count,
-                is_active: timer.is_active,
-                
-                // Timer interface fields
-                start_time: timer.start_time,
-                duration: timer.duration,
-                original_duration: timer.original_duration,
-                callback: Some(timer.id.clone()),
-                last_execution_time: timer.last_execution_time,
-                next_execution_time: timer.next_execution_time,
-                status: timer.status,
-                has_executed_once: timer.has_executed_once,
-            })
-        } else {
-            None
-        }
+        let formations = self.formations.lock().unwrap();
+        formations.get(formation_id).cloned()
     }
 
-    /// Get all active formations from centralized store
+    /// Get all active formations
     pub async fn get_active_formations(&self) -> Vec<Formation> {
-        let timeline = crate::context::state::timeline;
-        let active_timers = timeline.getActive();
-        
-        active_timers.into_iter()
-            .filter_map(|timer| {
-                // Convert Timer to Formation
-                Some(Formation {
-                    id: timer.id.clone(),
-                    action_id: timer.callback.unwrap_or_else(|| "unknown".to_string()),
-                    payload: serde_json::Value::Null,
-                    interval: timer.duration,
-                    repeat: match timer.repeat {
-                        Some(-1) => TimerRepeat::Forever,
-                        Some(1) => TimerRepeat::Once,
-                        Some(n) if n > 1 => TimerRepeat::Count(n as u64),
-                        _ => TimerRepeat::Once,
-                    },
-                    delay: timer.delay,
-                    priority: timer.priority,
-                    created_at: timer.start_time,
-                    next_execution: timer.next_execution_time,
-                    execution_count: timer.execution_count,
-                    is_active: timer.is_active,
-                    
-                    start_time: timer.start_time,
-                    duration: timer.duration,
-                    original_duration: timer.original_duration,
-                    callback: Some(timer.id.clone()),
-                    last_execution_time: timer.last_execution_time,
-                    next_execution_time: timer.next_execution_time,
-                    status: timer.status,
-                    has_executed_once: timer.has_executed_once,
-                })
-            })
+        let formations = self.formations.lock().unwrap();
+        formations.values()
+            .filter(|f| f.is_active)
+            .cloned()
             .collect()
     }
 
-    /// Get TimeKeeper statistics from centralized store
+    /// Get TimeKeeper statistics
     pub fn get_stats(&self) -> serde_json::Value {
-        let timeline = crate::context::state::timeline;
-        let all_timers = timeline.getAll();
-        let active_count = timeline.getActive().len();
+        let formations = self.formations.lock().unwrap();
+        let active_count = formations.values().filter(|f| f.is_active).count();
         
         serde_json::json!({
             "total_formations": self.total_formations.load(Ordering::Relaxed),
             "active_formations": active_count,
-            "completed_formations": all_timers.len() - active_count,
-            "is_running": self.is_running.load(Ordering::Relaxed),
-            "centralized_store": true
+            "completed_formations": formations.len() - active_count,
+            "is_running": self.is_running.load(Ordering::Relaxed)
         })
     }
 }
 
 //=============================================================================
-// FORMATION BUILDER (Updated to use centralized state)
+// FORMATION BUILDER
 //=============================================================================
 
 pub struct FormationBuilder {
@@ -407,7 +277,6 @@ impl FormationBuilder {
             self.priority,
         );
 
-        // ✅ Use centralized TimeKeeper (no local state)
         let timekeeper = get_timekeeper().await;
         timekeeper.schedule_formation(formation).await?;
         
@@ -416,7 +285,7 @@ impl FormationBuilder {
 }
 
 //=============================================================================
-// GLOBAL TIMEKEEPER INSTANCE (Singleton pattern)
+// GLOBAL TIMEKEEPER INSTANCE
 //=============================================================================
 
 static GLOBAL_TIMEKEEPER: tokio::sync::OnceCell<Arc<TimeKeeper>> = tokio::sync::OnceCell::const_new();
@@ -429,7 +298,7 @@ pub async fn get_timekeeper() -> Arc<TimeKeeper> {
 }
 
 //=============================================================================
-// CONVENIENCE FUNCTIONS (Updated)
+// CONVENIENCE FUNCTIONS
 //=============================================================================
 
 /// Set a timeout (equivalent to setTimeout)

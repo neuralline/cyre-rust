@@ -85,3 +85,16 @@ path = "examples/final_rust_victory.rs"
 [[example]]
 name = "quick_start"
 path = "examples/quick_start.rs"
+
+[[example]]
+name = "smart_home_demo"
+path = "examples/smart_home_demo.rs"
+
+[[example]]
+name = "simple_iot_demo"
+path = "examples/simple_iot_demo.rs"
+
+
+[[example]]
+name = "timekeeper_demo"
+path = "examples/timekeeper_demo.rs"

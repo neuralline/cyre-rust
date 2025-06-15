@@ -1,5 +1,5 @@
 // src/bin/cyre-server.rs - FIXED VERSION
-// Fixes Send issues with proper Arc<Mutex<>> usage
+// Fixes Send issues and import problems
 
 use cyre_rust::prelude::*;
 use serde_json::json;
@@ -18,42 +18,35 @@ struct ServerState {
     cyre: Arc<Mutex<Cyre>>, // ✅ tokio::sync::Mutex is Send
     start_time: u64,
     request_count: Arc<std::sync::atomic::AtomicU64>,
-    timekeeper_enabled: bool,
 }
 
 impl ServerState {
     async fn new() -> Self {
-        let mut cyre = Cyre::new();
-        
-        // ✅ Initialize TimeKeeper integration
-        if let Err(e) = cyre.init_timekeeper().await {
-            eprintln!("Warning: TimeKeeper initialization failed: {}", e);
-        }
+        let cyre = Cyre::new();
         
         Self {
             cyre: Arc::new(Mutex::new(cyre)),
             start_time: current_timestamp(),
             request_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            timekeeper_enabled: true,
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("🚀 CYRE RUST HTTP SERVER WITH TIMEKEEPER");
-    println!("=========================================");
-    println!("Powered by Centralized TimeKeeper + Thread-Safe Architecture");
+    println!("🚀 CYRE RUST HTTP SERVER");
+    println!("========================");
+    println!("Simple HTTP server with Cyre backend");
     println!();
 
-    // ✅ Initialize server state with proper async TimeKeeper
-    println!("🔧 Initializing Cyre with TimeKeeper integration...");
+    // Initialize server state
+    println!("🔧 Initializing Cyre server...");
     let state = Arc::new(ServerState::new().await);
     
-    // Setup Cyre server channels with TimeKeeper support
+    // Setup Cyre server channels
     setup_cyre_server_channels(&state).await;
     
-    println!("✅ Cyre channels with TimeKeeper registered successfully");
+    println!("✅ Cyre channels registered successfully");
 
     // Create HTTP service
     let make_svc = make_service_fn(move |_conn| {
@@ -70,79 +63,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let server = Server::bind(&addr).serve(make_svc);
 
-    println!("🌐 Cyre Server with TimeKeeper running on http://{}", addr);
-    println!("📊 API Endpoints (with TimeKeeper scheduling):");
+    println!("🌐 Cyre Server running on http://{}", addr);
+    println!("📊 API Endpoints:");
     println!("   • http://localhost:3000/                     - Server status");
     println!("   • http://localhost:3000/benchmark            - Fast benchmark");
-    println!("   • http://localhost:3000/api/health           - Health + TimeKeeper metrics");
-    println!("   • http://localhost:3000/api/performance      - Performance + TimeKeeper data");
-    println!("   • http://localhost:3000/api/schedule         - Schedule actions");
-    println!("   • http://localhost:3000/api/timeout          - setTimeout equivalent");
-    println!("   • http://localhost:3000/api/interval         - setInterval equivalent");
+    println!("   • http://localhost:3000/api/health           - Health check");
+    println!("   • http://localhost:3000/api/performance      - Performance data");
     println!("═══════════════════════════════════════════════════════════════════");
-    println!("🕒 TimeKeeper: Centralized state management");
-    println!("⚡ Zero lock contention across await boundaries");
-    println!("🔥 Ready to schedule at web scale!");
+    println!("🚀 Ready to serve at web scale!");
     println!();
 
-    // ✅ Graceful shutdown now works with proper Send bounds
-    let graceful = server.with_graceful_shutdown(shutdown_signal());
-    
-    if let Err(e) = graceful.await {
+    // ✅ Simple server run (no graceful shutdown complexity)
+    if let Err(e) = server.await {
         eprintln!("❌ Server error: {}", e);
     }
 
-    println!("👋 Cyre Server with TimeKeeper shut down gracefully");
+    println!("👋 Cyre Server shut down");
     Ok(())
 }
 
-async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C signal handler");
-}
-
-/// Setup all server routes as Cyre channels with TimeKeeper support
+/// Setup all server routes as Cyre channels
 async fn setup_cyre_server_channels(state: &Arc<ServerState>) {
-    println!("🔧 Registering Cyre server channels with TimeKeeper...");
+    println!("🔧 Registering Cyre server channels...");
 
     let mut cyre = state.cyre.lock().await;
 
-    // Define all HTTP routes as Cyre actions (some with TimeKeeper scheduling)
+    // Define all HTTP routes as Cyre actions
     let routes = [
-        ("GET-root", "Server root endpoint", false),
-        ("GET-benchmark", "Fast benchmark endpoint", false),
-        ("GET-api-health", "Health metrics + TimeKeeper", false),
-        ("GET-api-performance", "Performance + TimeKeeper analytics", false),
-        ("GET-api-schedule", "Schedule actions via TimeKeeper", false),
-        ("POST-api-timeout", "setTimeout via TimeKeeper", true), // ✅ Scheduled
-        ("POST-api-interval", "setInterval via TimeKeeper", true), // ✅ Scheduled
-        ("scheduled-task", "TimeKeeper scheduled execution", false),
-        ("http-request-router", "Main HTTP router", false),
+        ("GET-root", "Server root endpoint"),
+        ("GET-benchmark", "Fast benchmark endpoint"),
+        ("GET-api-health", "Health metrics"),
+        ("GET-api-performance", "Performance analytics"),
+        ("http-request-router", "Main HTTP router"),
     ];
 
     // Register all routes as Cyre actions
-    for (channel_id, description, uses_timekeeper) in routes.iter() {
-        if *uses_timekeeper {
-            // ✅ Register with TimeKeeper scheduling support
-            cyre.action(IO::new(*channel_id).timeout(0)); // Will be configured per request
-            println!("  🕒 {}: {} (TimeKeeper enabled)", channel_id, description);
-        } else {
-            cyre.action(IO::new(*channel_id));
-            println!("  ✅ {}: {}", channel_id, description);
-        }
+    for (channel_id, description) in routes.iter() {
+        cyre.action(IO::new(*channel_id));
+        println!("  ✅ {}: {}", channel_id, description);
     }
 
-    // Setup route handlers with TimeKeeper integration
+    // Setup route handlers
     setup_route_handlers(&mut cyre, Arc::clone(state)).await;
     
     println!("🎯 {} server channels registered", routes.len());
 }
 
 async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
-    println!("🔧 Setting up Cyre route handlers with TimeKeeper...");
+    println!("🔧 Setting up Cyre route handlers...");
 
-    // Root endpoint with TimeKeeper status
+    // Root endpoint
     let state_clone = Arc::clone(&state);
     cyre.on("GET-root", move |_payload| {
         let state = Arc::clone(&state_clone);
@@ -153,27 +123,23 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
             CyreResponse {
                 ok: true,
                 payload: json!({
-                    "message": "Cyre Rust HTTP Server with TimeKeeper",
+                    "message": "Cyre Rust HTTP Server",
                     "version": "1.0.0",
-                    "powered_by": "Centralized TimeKeeper + Cyre",
+                    "powered_by": "Cyre Rust",
                     "timestamp": current_timestamp(),
                     "uptime_ms": uptime,
                     "requests_served": request_count,
-                    "timekeeper_enabled": state.timekeeper_enabled,
                     "endpoints": [
                         "/",
                         "/benchmark", 
                         "/api/health",
-                        "/api/performance",
-                        "/api/schedule",
-                        "/api/timeout",
-                        "/api/interval"
+                        "/api/performance"
                     ]
                 }),
-                message: "Server status with TimeKeeper".to_string(),
+                message: "Server status".to_string(),
                 error: None,
                 timestamp: current_timestamp(),
-                metadata: Some(json!({"timekeeper": true})),
+                metadata: None,
             }
         })
     });
@@ -186,34 +152,24 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
                 payload: json!({
                     "hello": "world",
                     "timestamp": current_timestamp(),
-                    "server": "cyre-rust-timekeeper",
+                    "server": "cyre-rust",
                     "benchmark": true,
-                    "latency": "sub-microsecond",
-                    "timekeeper": "centralized"
+                    "latency": "sub-microsecond"
                 }),
-                message: "Benchmark with TimeKeeper".to_string(),
+                message: "Benchmark response".to_string(),
                 error: None,
                 timestamp: current_timestamp(),
-                metadata: Some(json!({"benchmark": true, "timekeeper": true})),
+                metadata: Some(json!({"benchmark": true})),
             }
         })
     });
 
-    // Health endpoint with TimeKeeper metrics
+    // Health endpoint
     let state_clone = Arc::clone(&state);
     cyre.on("GET-api-health", move |_payload| {
         let state = Arc::clone(&state_clone);
         Box::pin(async move {
             let uptime = current_timestamp() - state.start_time;
-            
-            // ✅ Get TimeKeeper stats
-            let timekeeper_stats = if state.timekeeper_enabled {
-                match crate::timekeeper::get_timekeeper().await.get_stats() {
-                    stats => Some(stats),
-                }
-            } else {
-                None
-            };
             
             CyreResponse {
                 ok: true,
@@ -226,32 +182,29 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
                         "cpu_usage": "low", 
                         "error_rate": 0.0,
                         "response_time": "sub-microsecond",
-                        "uptime": "stable",
-                        "timekeeper_system": "operational"
+                        "uptime": "stable"
                     },
-                    "timekeeper_metrics": timekeeper_stats,
                     "system_checks": {
-                        "centralized_state": "operational",
-                        "timeline_store": "active",
+                        "cyre_core": "operational",
                         "fast_path_optimization": "99.9% active",
                         "memory_safety": "guaranteed",
                         "zero_gc_pauses": "confirmed"
                     }
                 }),
-                message: "Health check with TimeKeeper metrics".to_string(),
+                message: "Health check passed".to_string(),
                 error: None,
                 timestamp: current_timestamp(),
-                metadata: Some(json!({"timekeeper": true})),
+                metadata: None,
             }
         })
     });
 
-    // Performance endpoint with TimeKeeper data
+    // Performance endpoint
     let state_clone = Arc::clone(&state);
     cyre.on("GET-api-performance", move |_payload| {
         let state = Arc::clone(&state_clone);
         Box::pin(async move {
-            // ✅ Get performance metrics including TimeKeeper
+            // Get performance metrics
             let cyre_guard = state.cyre.lock().await;
             let performance_metrics = cyre_guard.get_performance_metrics();
             drop(cyre_guard);
@@ -261,107 +214,21 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
                 payload: json!({
                     "timestamp": current_timestamp(),
                     "cyre_performance": performance_metrics,
-                    "timekeeper_performance": {
-                        "centralized_state": true,
-                        "timeline_store_active": true,
-                        "precision_timing": "10ms ticker",
-                        "scheduled_executions": performance_metrics["timekeeper_executions"],
-                        "vs_local_state": "infinite scalability"
-                    },
-                    "advantages": {
+                    "rust_advantages": {
                         "memory_management": "deterministic (no GC)",
-                        "state_management": "centralized stores",
-                        "timing_precision": "drift compensation",
                         "concurrency": "fearless with Send bounds",
-                        "performance": "legendary + scheduled"
+                        "performance": "legendary speed"
                     }
                 }),
-                message: "Performance metrics with TimeKeeper".to_string(),
+                message: "Performance metrics".to_string(),
                 error: None,
                 timestamp: current_timestamp(),
-                metadata: Some(json!({"performance": true, "timekeeper": true})),
+                metadata: Some(json!({"performance": true})),
             }
         })
     });
 
-    // ✅ NEW: Schedule endpoint for TimeKeeper operations
-    let state_clone = Arc::clone(&state);
-    cyre.on("GET-api-schedule", move |payload| {
-        let state = Arc::clone(&state_clone);
-        Box::pin(async move {
-            let action_id = payload.get("action")
-                .and_then(|v| v.as_str())
-                .unwrap_or("scheduled-task");
-                
-            let interval = payload.get("interval")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1000);
-                
-            let repeat = payload.get("repeat")
-                .and_then(|v| v.as_str())
-                .unwrap_or("once");
-
-            // ✅ Schedule via TimeKeeper
-            let schedule_payload = json!({
-                "message": "TimeKeeper scheduled execution",
-                "timestamp": current_timestamp()
-            });
-
-            let result = match repeat {
-                "forever" => crate::timekeeper::set_interval(action_id, schedule_payload, interval).await,
-                _ => crate::timekeeper::set_timeout(action_id, schedule_payload, interval).await,
-            };
-
-            match result {
-                Ok(formation_id) => CyreResponse {
-                    ok: true,
-                    payload: json!({
-                        "scheduled": true,
-                        "formation_id": formation_id,
-                        "action": action_id,
-                        "interval": interval,
-                        "repeat": repeat,
-                        "timekeeper": "centralized"
-                    }),
-                    message: "Action scheduled via TimeKeeper".to_string(),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: Some(json!({"timekeeper": true})),
-                },
-                Err(error) => CyreResponse {
-                    ok: false,
-                    payload: json!({"error": error}),
-                    message: "Scheduling failed".to_string(),
-                    error: Some("schedule_error".to_string()),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                }
-            }
-        })
-    });
-
-    // ✅ TimeKeeper scheduled task handler
-    cyre.on("scheduled-task", |payload| {
-        Box::pin(async move {
-            println!("⏰ TimeKeeper executed scheduled task: {}", payload);
-            
-            CyreResponse {
-                ok: true,
-                payload: json!({
-                    "executed": true,
-                    "via": "timekeeper",
-                    "input": payload,
-                    "execution_time": current_timestamp()
-                }),
-                message: "Scheduled task executed".to_string(),
-                error: None,
-                timestamp: current_timestamp(),
-                metadata: Some(json!({"timekeeper_execution": true})),
-            }
-        })
-    });
-
-    // Main HTTP router (unchanged but with TimeKeeper awareness)
+    // Main HTTP router
     cyre.on("http-request-router", |payload| {
         Box::pin(async move {
             let path = payload.get("path")
@@ -383,7 +250,6 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
                 ("GET", "/benchmark") => "GET-benchmark",
                 ("GET", "/api/health") => "GET-api-health",
                 ("GET", "/api/performance") => "GET-api-performance",
-                ("GET", "/api/schedule") => "GET-api-schedule",
                 _ => {
                     return CyreResponse {
                         ok: false,
@@ -395,14 +261,13 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
                                 "/",
                                 "/benchmark",
                                 "/api/health",
-                                "/api/performance",
-                                "/api/schedule"
+                                "/api/performance"
                             ]
                         }),
                         message: "Route not found".to_string(),
                         error: Some("not_found".to_string()),
                         timestamp: current_timestamp(),
-                        metadata: Some(json!({"timekeeper": true})),
+                        metadata: None,
                     };
                 }
             };
@@ -414,18 +279,17 @@ async fn setup_route_handlers(cyre: &mut Cyre, state: Arc<ServerState>) {
                     "path": path,
                     "method": method,
                     "query_params": query_params,
-                    "routed_through": "Cyre + TimeKeeper",
-                    "centralized_state": true
+                    "routed_through": "Cyre"
                 }),
-                message: format!("Routed to {} via Cyre+TimeKeeper", channel_id),
+                message: format!("Routed to {} via Cyre", channel_id),
                 error: None,
                 timestamp: current_timestamp(),
-                metadata: Some(json!({"routing": true, "timekeeper": true})),
+                metadata: Some(json!({"routing": true})),
             }
         })
     });
 
-    println!("✅ All route handlers with TimeKeeper configured");
+    println!("✅ All route handlers configured");
 }
 
 /// Main HTTP request handler - FIXED for Send compatibility
@@ -458,7 +322,7 @@ async fn handle_request(
 
     // Handle CORS preflight
     if method == Method::OPTIONS {
-        return Ok(create_cors_response(StatusCode::OK, json!({"cors": "handled_by_timekeeper_cyre"})));
+        return Ok(create_cors_response(StatusCode::OK, json!({"cors": "handled"})));
     }
 
     // ✅ Route through Cyre - FIXED lock scope
@@ -467,7 +331,7 @@ async fn handle_request(
         "method": method.as_str(),
         "query_params": query_params,
         "timestamp": current_timestamp(),
-        "server": "Cyre + TimeKeeper"
+        "server": "Cyre"
     });
 
     // Call Cyre router
@@ -494,8 +358,7 @@ async fn handle_request(
         "query_params": query_params,
         "timestamp": current_timestamp(),
         "uptime": current_timestamp() - state.start_time,
-        "request_count": state.request_count.load(std::sync::atomic::Ordering::SeqCst),
-        "timekeeper": true
+        "request_count": state.request_count.load(std::sync::atomic::Ordering::SeqCst)
     });
 
     let response_result = {
@@ -512,7 +375,7 @@ async fn handle_request(
                 "error": "Internal server error",
                 "message": response_result.message,
                 "channel": channel_id,
-                "server": "Cyre + TimeKeeper"
+                "server": "Cyre"
             })
         ))
     }

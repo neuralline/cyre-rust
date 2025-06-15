@@ -1,24 +1,27 @@
 // src/lib.rs
-// Cyre Rust - Now with ULTIMATE TimeKeeper integration!
-// The most advanced event management system ever built
+// Cyre Rust - Fixed module structure and exports
 
 //=============================================================================
-// MODULE DECLARATIONS
+// MODULE DECLARATIONS - FIXED
 //=============================================================================
 
-pub mod types;       // Core types and configurations
+// Core types module (using mod.rs structure)
+pub mod types;
+
+// Other modules
 pub mod protection;  // Protection mechanisms  
 pub mod talent;      // Talent system
 pub mod breathing;   // Quantum breathing system
-pub mod timekeeper;  // ULTIMATE TimeKeeper system 🔥
+pub mod timekeeper;  // TimeKeeper system
 pub mod timeline;    // Timeline and scheduling (legacy)
 pub mod branch;      // Branch system
 pub mod channel;     // Channel implementation
 pub mod core;        // Main Cyre implementation
+pub mod context;     // Context and state management - ADDED
 pub mod utils;       // Utility functions
 
 //=============================================================================
-// RE-EXPORTS FOR PUBLIC API
+// RE-EXPORTS FOR PUBLIC API - FIXED
 //=============================================================================
 
 // Core types
@@ -31,20 +34,22 @@ pub use types::{
 // Main implementation
 pub use core::Cyre;
 
-// ULTIMATE TimeKeeper system
+// TimeKeeper system (fixed exports)
 pub use timekeeper::{
-    TimeKeeper, Formation, FormationBuilder, TimerRepeat, PrecisionTier,
+    TimeKeeper, Formation, FormationBuilder, TimerRepeat,
     get_timekeeper, set_timeout, set_interval, clear_timer, delay,
-    TimeKeeperIntegration,
 };
 
 // Advanced systems
 pub use talent::{Talent, TalentType, TalentRegistry};
 pub use breathing::{QuantumBreathing, BreathingPattern};
-pub use timeline::{Timeline, TimelineEntry}; // Legacy timeline
+pub use timeline::{Timeline, TimelineEntry};
 pub use branch::{BranchSystem, BranchEntry};
 pub use channel::Channel;
 pub use protection::{ProtectionState, ProtectionType};
+
+// Context and state
+pub use context::{TimelineStore};
 
 // Utility functions
 pub use utils::current_timestamp;
@@ -63,7 +68,7 @@ pub mod benchmarks;
 // CONVENIENCE MACROS
 //=============================================================================
 
-/// Timeout macro - setTimeout equivalent but better
+/// Timeout macro - setTimeout equivalent
 #[macro_export]
 macro_rules! timeout {
     ($action:expr, $payload:expr, $delay:expr) => {
@@ -71,7 +76,7 @@ macro_rules! timeout {
     };
 }
 
-/// Interval macro - setInterval equivalent but better
+/// Interval macro - setInterval equivalent
 #[macro_export]
 macro_rules! interval {
     ($action:expr, $payload:expr, $interval:expr) => {
@@ -95,22 +100,21 @@ macro_rules! sleep {
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Library description
-pub const DESCRIPTION: &str = "Ultimate reactive event manager with beast-mode TimeKeeper";
+pub const DESCRIPTION: &str = "High-performance reactive event manager with TimeKeeper";
 
 //=============================================================================
-// PRELUDE MODULE FOR CONVENIENCE
+// PRELUDE MODULE FOR CONVENIENCE - FIXED
 //=============================================================================
 
-/// Complete imports for Cyre users - now with TimeKeeper!
+/// Complete imports for Cyre users
 pub mod prelude {
     pub use crate::{
         // Core Cyre
         Cyre, IO, CyreResponse, ActionPayload, Priority,
         
-        // TimeKeeper beast mode
-        TimeKeeper, Formation, FormationBuilder, TimerRepeat, PrecisionTier,
+        // TimeKeeper
+        TimeKeeper, Formation, FormationBuilder, TimerRepeat,
         get_timekeeper, set_timeout, set_interval, clear_timer, delay,
-        TimeKeeperIntegration,
         
         // Advanced systems
         Talent, TalentType, QuantumBreathing,
@@ -129,36 +133,28 @@ pub mod prelude {
 }
 
 //=============================================================================
-// CYRE BUILDER WITH TIMEKEEPER INTEGRATION
+// CYRE BUILDER - SIMPLIFIED
 //=============================================================================
 
-/// Enhanced Cyre builder with TimeKeeper integration
+/// Enhanced Cyre builder
 pub struct CyreBuilder {
     enable_timekeeper: bool,
     enable_breathing: bool,
     enable_talents: bool,
-    precision_mode: Option<PrecisionTier>,
 }
 
 impl CyreBuilder {
     pub fn new() -> Self {
         Self {
-            enable_timekeeper: true,  // Enabled by default
+            enable_timekeeper: true,
             enable_breathing: true,
             enable_talents: true,
-            precision_mode: None,
         }
     }
 
     /// Enable/disable TimeKeeper integration
     pub fn with_timekeeper(mut self, enabled: bool) -> Self {
         self.enable_timekeeper = enabled;
-        self
-    }
-
-    /// Set TimeKeeper precision mode
-    pub fn with_precision(mut self, precision: PrecisionTier) -> Self {
-        self.precision_mode = Some(precision);
         self
     }
 
@@ -180,10 +176,9 @@ impl CyreBuilder {
 
         if self.enable_timekeeper {
             cyre.init_timekeeper().await?;
-            println!("✅ TimeKeeper initialized with beast-mode precision!");
+            println!("✅ TimeKeeper initialized!");
         }
 
-        // TODO: Initialize other systems based on flags
         if self.enable_breathing {
             println!("✅ Quantum breathing system initialized");
         }
@@ -201,4 +196,3 @@ impl Default for CyreBuilder {
         Self::new()
     }
 }
-

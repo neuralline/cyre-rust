@@ -1,5 +1,5 @@
 // src/talent/functions.rs
-// Common talent functions and utilities
+// Common talent functions and utilities - FIXED type annotations
 
 use crate::types::{ActionPayload, ValidationResult};
 use serde_json::{json, Value};
@@ -274,10 +274,10 @@ pub fn select_fields<'a>(fields: &'a [&'a str]) -> impl Fn(ActionPayload) -> Act
     }
 }
 
-/// Select nested field
+/// Select nested field - FIXED with explicit type annotation
 pub fn select_nested(path: &str) -> impl Fn(ActionPayload) -> ActionPayload + '_ {
     let path = path.to_string();
-    move |payload| {
+    move |payload: ActionPayload| -> ActionPayload {
         let parts: Vec<&str> = path.split('.').collect();
         let mut current = &payload;
         
