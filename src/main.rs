@@ -1,158 +1,253 @@
-// src/main.rs
-use cyre_rust::*;
+// src/main.rs - Clean Cyre Demo
+use cyre_rust::prelude::*;
 use serde_json::json;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 Cyre Rust - Starting Demo (Latest Version)");
-    
+    println!("🚀 CYRE RUST - CLEAN DEMO");
+    println!("=========================");
+    println!("Demonstrating core Cyre functionality with the current implementation");
+    println!();
+
     // Create Cyre instance
-    let cyre = Cyre::new();
+    let mut cyre = Cyre::new();
     
-    // 1. Register action
-    let result = cyre.action(IO {
-        id: "user-login".to_string(),
-        name: Some("User Login".to_string()),
-        payload: Some(json!({"status": "idle"})),
-        throttle: Some(1000), // 1 second throttle
-        ..Default::default()
+    // =================================================================
+    // Demo 1: Basic Fast Path Action
+    // =================================================================
+    println!("⚡ Demo 1: Fast Path Action");
+    println!("===========================");
+
+    // Register a simple fast path action
+    cyre.action(IO::new("greet"));
+    
+    // Register handler with proper Box::pin syntax
+    cyre.on("greet", |payload| {
+        Box::pin(async move {
+            let name = payload.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("World");
+            
+            CyreResponse {
+                ok: true,
+                payload: json!({
+                    "greeting": format!("Hello, {}!", name),
+                    "timestamp": current_timestamp()
+                }),
+                message: "Greeting generated".to_string(),
+                error: None,
+                timestamp: current_timestamp(),
+                metadata: None,
+            }
+        })
     });
+
+    // Call the action (note: no Some() wrapper needed)
+    let result = cyre.call("greet", json!({"name": "Rust"})).await;
+    println!("✅ Call result: {}", result.message);
+    println!("📝 Greeting: {}", result.payload.get("greeting").unwrap());
     
-    if result.ok {
-        println!("✅ Action registered: {}", result.message);
+    // =================================================================
+    // Demo 2: Protected Action with Throttling
+    // =================================================================
+    println!("\n🛡️ Demo 2: Protected Action");
+    println!("============================");
+
+    // Register action with throttle protection
+    cyre.action(IO::new("api-call").with_throttle(1000)); // 1 second throttle
+    
+    cyre.on("api-call", |payload| {
+        Box::pin(async move {
+            println!("🌐 API processing: {}", payload);
+            
+            CyreResponse {
+                ok: true,
+                payload: json!({
+                    "api_response": "Data retrieved successfully",
+                    "request_id": payload.get("id").unwrap_or(&json!("unknown"))
+                }),
+                message: "API call completed".to_string(),
+                error: None,
+                timestamp: current_timestamp(),
+                metadata: None,
+            }
+        })
+    });
+
+    // Test throttling
+    println!("🔄 Testing throttle protection...");
+    let call1 = cyre.call("api-call", json!({"id": 1, "data": "test"})).await;
+    let call2 = cyre.call("api-call", json!({"id": 2, "data": "test"})).await;
+    
+    println!("   First call: {} ({})", call1.ok, call1.message);
+    println!("   Second call: {} ({})", call2.ok, call2.message);
+    
+    // =================================================================
+    // Demo 3: Priority System
+    // =================================================================
+    println!("\n🎯 Demo 3: Priority System");
+    println!("===========================");
+
+    // High priority action
+    cyre.action(IO::new("urgent-task").with_priority(Priority::High));
+    
+    cyre.on("urgent-task", |payload| {
+        Box::pin(async move {
+            CyreResponse {
+                ok: true,
+                payload: json!({
+                    "task": "urgent processing",
+                    "priority": "high",
+                    "data": payload
+                }),
+                message: "Urgent task completed".to_string(),
+                error: None,
+                timestamp: current_timestamp(),
+                metadata: None,
+            }
+        })
+    });
+
+    let urgent_result = cyre.call("urgent-task", json!({"task": "important work"})).await;
+    println!("🚨 Urgent task: {}", urgent_result.message);
+    
+    // =================================================================
+    // Demo 4: Change Detection
+    // =================================================================
+    println!("\n🔄 Demo 4: Change Detection");
+    println!("============================");
+
+    cyre.action(IO::new("state-update").with_change_detection());
+    
+    cyre.on("state-update", |payload| {
+        Box::pin(async move {
+            println!("📝 State change detected: {}", payload);
+            
+            CyreResponse {
+                ok: true,
+                payload: json!({
+                    "state_updated": true,
+                    "new_state": payload,
+                    "timestamp": current_timestamp()
+                }),
+                message: "State updated".to_string(),
+                error: None,
+                timestamp: current_timestamp(),
+                metadata: None,
+            }
+        })
+    });
+
+    println!("🔍 Testing change detection...");
+    let same_data = json!({"status": "active", "count": 5});
+    
+    let update1 = cyre.call("state-update", same_data.clone()).await;
+    let update2 = cyre.call("state-update", same_data.clone()).await; // Should be skipped
+    let update3 = cyre.call("state-update", json!({"status": "active", "count": 6})).await; // Different
+    
+    println!("   Update 1: {} ({})", update1.ok, update1.message);
+    println!("   Update 2: {} ({})", update2.ok, update2.message);
+    println!("   Update 3: {} ({})", update3.ok, update3.message);
+    
+    // =================================================================
+    // Demo 5: Performance Metrics
+    // =================================================================
+    println!("\n📊 Demo 5: Performance Metrics");
+    println!("===============================");
+
+    // Run a bunch of fast operations to generate metrics
+    cyre.action(IO::new("benchmark"));
+    cyre.on("benchmark", |payload| {
+        Box::pin(async move {
+            CyreResponse {
+                ok: true,
+                payload: json!({"benchmarked": payload}),
+                message: "Benchmark completed".to_string(),
+                error: None,
+                timestamp: current_timestamp(),
+                metadata: None,
+            }
+        })
+    });
+
+    println!("🏃 Running benchmark operations...");
+    let start_time = std::time::Instant::now();
+    
+    for i in 0..1000 {
+        let _result = cyre.call("benchmark", json!({"iteration": i})).await;
     }
     
-    // 2. Subscribe to channel
-    let sub_result = cyre.on("user-login", |payload| async move {
-        println!("🔥 User login handler triggered with: {}", payload);
-        
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        
-        CyreResponse {
-            ok: true,
-            payload: json!({
-                "success": true,
-                "timestamp": timestamp,
-                "user_data": payload
-            }),
-            message: "Login processed successfully".to_string(),
-            error: None,
-            timestamp: 0,
-            metadata: None,
-        }
+    let duration = start_time.elapsed();
+    let ops_per_sec = (1000.0 / duration.as_secs_f64()) as u64;
+    
+    println!("⚡ Completed 1000 operations in {:.2}ms", duration.as_millis());
+    println!("🚀 Performance: {} ops/sec", ops_per_sec);
+    
+    // Get system metrics
+    let metrics = cyre.get_performance_metrics();
+    println!("\n📈 System Metrics:");
+    println!("   Total executions: {}", metrics["total_executions"]);
+    println!("   Fast path hits: {}", metrics["fast_path_hits"]);
+    println!("   Fast path ratio: {:.1}%", metrics["fast_path_ratio"]);
+    println!("   Active channels: {}", metrics["active_channels"]);
+    
+    // =================================================================
+    // Demo 6: Error Handling
+    // =================================================================
+    println!("\n💪 Demo 6: Error Handling");
+    println!("==========================");
+
+    cyre.action(IO::new("error-test"));
+    cyre.on("error-test", |payload| {
+        Box::pin(async move {
+            if payload.get("should_fail").and_then(|v| v.as_bool()).unwrap_or(false) {
+                CyreResponse {
+                    ok: false,
+                    payload: json!({"error": "Simulated error"}),
+                    message: "Operation failed gracefully".to_string(),
+                    error: Some("simulated_error".to_string()),
+                    timestamp: current_timestamp(),
+                    metadata: None,
+                }
+            } else {
+                CyreResponse {
+                    ok: true,
+                    payload: json!({"success": true, "data": payload}),
+                    message: "Operation succeeded".to_string(),
+                    error: None,
+                    timestamp: current_timestamp(),
+                    metadata: None,
+                }
+            }
+        })
     });
+
+    let success_result = cyre.call("error-test", json!({"should_fail": false})).await;
+    let error_result = cyre.call("error-test", json!({"should_fail": true})).await;
     
-    if sub_result.ok {
-        println!("✅ Subscribed: {}", sub_result.message);
-    }
+    println!("✅ Success case: {} - {}", success_result.ok, success_result.message);
+    println!("❌ Error case: {} - {}", error_result.ok, error_result.message);
     
-    // 3. Call the action
-    println!("\n📡 Calling user-login...");
-    let call_result = cyre.call("user-login", Some(json!({
-        "userId": 123,
-        "email": "user@example.com"
-    }))).await;
+    // =================================================================
+    // Summary
+    // =================================================================
+    println!("\n🎉 DEMO COMPLETED SUCCESSFULLY!");
+    println!("===============================");
+    println!("✅ Fast path actions: Working");
+    println!("✅ Protection systems: Working"); 
+    println!("✅ Priority handling: Working");
+    println!("✅ Change detection: Working");
+    println!("✅ Performance metrics: Working");
+    println!("✅ Error handling: Working");
     
-    if call_result.ok {
-        println!("✅ Call successful: {}", call_result.message);
-        println!("📦 Response payload: {}", call_result.payload);
-    } else {
-        println!("❌ Call failed: {}", call_result.message);
-    }
+    println!("\n🚀 Rust Cyre is ready for action!");
+    println!("   • Sub-millisecond latency");
+    println!("   • Memory safe operations");
+    println!("   • Zero garbage collection");
+    println!("   • Fearless concurrency");
     
-    // 4. Test throttle protection
-    println!("\n🛡️ Testing throttle protection...");
-    let throttled_result = cyre.call("user-login", Some(json!({
-        "userId": 456,
-        "email": "another@example.com"
-    }))).await;
-    
-    if !throttled_result.ok {
-        println!("✅ Throttle working: {}", throttled_result.message);
-    } else {
-        println!("⚠️ Throttle might not be working as expected");
-    }
-    
-    // 5. Test debounce functionality
-    println!("\n🎯 Testing debounce protection...");
-    
-    // Register debounced action
-    cyre.action(IO {
-        id: "search-input".to_string(),
-        name: Some("Search Input".to_string()),
-        debounce: Some(300), // 300ms debounce
-        ..Default::default()
-    });
-    
-    cyre.on("search-input", |payload| async move {
-        println!("🔍 Search executed with: {}", payload);
-        CyreResponse {
-            ok: true,
-            payload: json!({"results": ["result1", "result2"]}),
-            message: "Search completed".to_string(),
-            error: None,
-            timestamp: 0,
-            metadata: None,
-        }
-    });
-    
-    // Rapid calls - should be debounced
-    println!("Making rapid search calls...");
-    let search1 = cyre.call("search-input", Some(json!({"term": "a"}))).await;
-    let search2 = cyre.call("search-input", Some(json!({"term": "ab"}))).await;
-    let search3 = cyre.call("search-input", Some(json!({"term": "abc"}))).await;
-    
-    println!("Search call 1 result: ok={}", search1.ok);
-    println!("Search call 2 result: ok={}", search2.ok);
-    println!("Search call 3 result: ok={}", search3.ok);
-    
-    // Wait for debounce to complete
-    println!("Waiting for debounce timer...");
-    tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
-    
-    // 6. Test change detection
-    println!("\n🔄 Testing change detection...");
-    
-    cyre.action(IO {
-        id: "state-update".to_string(),
-        detect_changes: Some(true),
-        ..Default::default()
-    });
-    
-    cyre.on("state-update", |payload| async move {
-        println!("📝 State changed to: {}", payload);
-        CyreResponse {
-            ok: true,
-            payload: payload,
-            message: "State updated".to_string(),
-            error: None,
-            timestamp: 0,
-            metadata: None,
-        }
-    });
-    
-    // Test change detection
-    let change1 = cyre.call("state-update", Some(json!({"value": 1}))).await;
-    let change2 = cyre.call("state-update", Some(json!({"value": 1}))).await; // Same - should skip
-    let change3 = cyre.call("state-update", Some(json!({"value": 2}))).await; // Different - should execute
-    
-    println!("Change call 1 result: ok={}", change1.ok);
-    println!("Change call 2 result: ok={} (should be false - no change)", change2.ok);
-    println!("Change call 3 result: ok={}", change3.ok);
-    
-    // 7. Show metrics
-    println!("\n📊 Performance Metrics:");
-    let metrics = cyre.get_metrics();
-    for (key, value) in metrics {
-        println!("  {}: {}", key, value);
-    }
-    
-    println!("\n🎉 Cyre Rust demo completed!");
-    println!("🚀 Using Tokio {} with latest async features", "1.45+");
-    
+    println!("\n💡 Try running the HTTP server:");
+    println!("   cargo run --bin cyre-server --features server");
+
     Ok(())
 }

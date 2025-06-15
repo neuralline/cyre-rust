@@ -1,24 +1,87 @@
 [package]
-name = "cyre-rust"
+name = "cyre_rust"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+authors = ["Cyre Team"]
+description = "High-performance reactive event manager - Rust implementation of Cyre"
+license = "MIT"
+keywords = ["reactive", "events", "performance", "async", "state-management"]
+categories = ["asynchronous", "web-programming", "data-structures"]
 
+[lib]
+name = "cyre_rust"
+path = "src/lib.rs"
+
+# Core dependencies - stable versions only
 [dependencies]
-# Updated to latest versions as of 2025
-tokio = { version = "1.45", features = ["full"] }
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP server dependencies - always available
+hyper = { version = "0.14", features = ["full"] }
 
 [dev-dependencies]
-tokio-test = "0.4.4"
+criterion = "0.5"         # Benchmarking
+tokio-test = "0.4"        # Async testing utilities
 
-# Optional: For performance benchmarks
-[dev-dependencies.criterion]
-version = "0.5.1"
-features = ["html_reports"]
+[features]
+default = []
+benchmarks = []
+server = []
 
+# Aggressive optimization settings
+[profile.release]
+opt-level = 3              # Maximum optimization
+lto = "thin"               # Link-time optimization
+codegen-units = 1          # Better optimization at cost of compile time
+panic = "abort"            # Smaller binaries, faster execution
+overflow-checks = false    # Disable integer overflow checks in release
 
+# Fast development builds
+[profile.dev]
+opt-level = 1              # Some optimization for development
+debug = true
+overflow-checks = true
+
+# Benchmark profile for accurate performance testing
+[profile.bench]
+inherits = "release"
+debug = true               # Keep debug info for profiling
+lto = "fat"                # Aggressive link-time optimization
+
+# Binary definitions
+[[bin]]
+name = "cyre-server"
+path = "src/bin/cyre-server.rs"
 
 [[bin]]
-name = "demo"
+name = "cyre_rust"
 path = "src/main.rs"
+
+[[example]]
+name = "simple_usage"
+path = "examples/simple_usage.rs"
+
+[[example]]
+name = "modular_performance_test"
+path = "examples/modular_performance_test.rs"
+
+[[example]]
+name = "realistic_performance_test"
+path = "examples/realistic_performance_test.rs"
+
+[[example]]
+name = "rust_comeback_test"
+path = "examples/rust_comeback_test.rs"
+
+[[example]]
+name = "final_rust_victory"
+path = "examples/final_rust_victory.rs"
+
+[[example]]
+name = "quick_start"
+path = "examples/quick_start.rs"
