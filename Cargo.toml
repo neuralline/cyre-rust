@@ -1,15 +1,16 @@
 [package]
-name = "cyre_rust"
-version = "0.1.0"
+name = "cyre"
+version = "0.2.1"
 edition = "2024"
 authors = ["Cyre Team"]
 description = "High-performance reactive event manager - Rust implementation of Cyre"
 license = "MIT"
+repository = "https://github.com/neuralline/cyre-rust"
 keywords = ["reactive", "events", "performance", "async", "state-management"]
 categories = ["asynchronous", "web-programming", "data-structures"]
 
 [lib]
-name = "cyre_rust"
+name = "cyre"
 path = "src/lib.rs"
 
 # Core dependencies - stable versions only
@@ -23,6 +24,7 @@ serde_json = "1.0"
 
 # HTTP server dependencies - always available
 hyper = { version = "0.14", features = ["full"] }
+rand = "0.9.1"
 
 [dev-dependencies]
 criterion = "0.5"         # Benchmarking
@@ -59,7 +61,7 @@ name = "cyre-server"
 path = "src/bin/cyre-server.rs"
 
 [[bin]]
-name = "cyre_rust"
+name = "cyre"
 path = "src/main.rs"
 
 [[example]]
@@ -93,7 +95,6 @@ path = "examples/smart_home_demo.rs"
 [[example]]
 name = "simple_iot_demo"
 path = "examples/simple_iot_demo.rs"
-
 
 [[example]]
 name = "timekeeper_demo"
