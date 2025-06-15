@@ -10,7 +10,7 @@ keywords = ["reactive", "events", "performance", "async", "state-management"]
 categories = ["asynchronous", "web-programming", "data-structures"]
 
 [lib]
-name = "cyre"
+name = "cyre_rust"
 path = "src/lib.rs"
 
 # Core dependencies - stable versions only
@@ -61,7 +61,7 @@ name = "cyre-server"
 path = "src/bin/cyre-server.rs"
 
 [[bin]]
-name = "cyre"
+name = "cyre_rust"
 path = "src/main.rs"
 
 [[example]]
@@ -95,6 +95,7 @@ path = "examples/smart_home_demo.rs"
 [[example]]
 name = "simple_iot_demo"
 path = "examples/simple_iot_demo.rs"
+
 
 [[example]]
 name = "timekeeper_demo"
