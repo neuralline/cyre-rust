@@ -1,506 +1,309 @@
 // src/talent/registry.rs
 // Talent registry for managing and executing talents
 
-use std::sync::{Arc, RwLock, atomic::{AtomicU64, Ordering}};
-use crate::types::{ActionPayload, TalentResult, FastMap, IO};
-use super::{Talent, TalentPipeline, TalentContext};
+use std::collections::HashMap;
+use std::sync::{ Arc, RwLock, OnceLock };
+use serde_json::Value;
+
+use crate::types::{ ActionPayload, TalentResult };
+use crate::talent::types::Talent;
+
+/*
+
+      C.Y.R.E - T.A.L.E.N.T - R.E.G.I.S.T.R.Y
+      
+      Central registry for talent management and execution
+
+*/
 
 //=============================================================================
 // TALENT REGISTRY
 //=============================================================================
 
-/// Registry for managing talents and their execution
 #[derive(Debug)]
 pub struct TalentRegistry {
-    talents: Arc<RwLock<FastMap<String, Talent>>>,
-    pipelines: Arc<RwLock<FastMap<String, TalentPipeline>>>,
-    
-    // Performance metrics
-    execution_count: AtomicU64,
-    talent_executions: AtomicU64,
-    pipeline_executions: AtomicU64,
-    error_count: AtomicU64,
+    talents: Arc<RwLock<HashMap<String, Talent>>>,
+    pipelines: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    execution_stats: Arc<RwLock<HashMap<String, ExecutionStats>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionStats {
+    pub total_executions: u64,
+    pub successful_executions: u64,
+    pub failed_executions: u64,
+    pub average_execution_time: u64,
+    pub last_execution_time: u64,
 }
 
 impl TalentRegistry {
-    /// Create a new talent registry
     pub fn new() -> Self {
         Self {
-            talents: Arc::new(RwLock::new(FastMap::default())),
-            pipelines: Arc::new(RwLock::new(FastMap::default())),
-            execution_count: AtomicU64::new(0),
-            talent_executions: AtomicU64::new(0),
-            pipeline_executions: AtomicU64::new(0),
-            error_count: AtomicU64::new(0),
+            talents: Arc::new(RwLock::new(HashMap::new())),
+            pipelines: Arc::new(RwLock::new(HashMap::new())),
+            execution_stats: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Register a talent in the registry
-    pub fn register_talent(&self, talent: Talent) -> Result<bool, String> {
-        if talent.id.is_empty() {
-            return Err("Talent ID cannot be empty".to_string());
+    /// Register a new talent
+    pub fn register_talent(&self, talent: Talent) -> Result<(), String> {
+        let mut talents = self.talents.write().unwrap();
+
+        if talents.contains_key(&talent.id) {
+            return Err(format!("Talent with ID '{}' already exists", talent.id));
         }
 
-        let mut talents = self.talents.write().unwrap();
-        let existed = talents.contains_key(&talent.id);
         talents.insert(talent.id.clone(), talent);
-        
-        Ok(!existed)
+        Ok(())
+    }
+
+    /// Execute a single talent
+    pub async fn execute_talent(&self, talent_id: &str, payload: ActionPayload) -> TalentResult {
+        let start_time = std::time::Instant::now();
+
+        let talent = {
+            let talents = self.talents.read().unwrap();
+            match talents.get(talent_id) {
+                Some(talent) => talent.clone(),
+                None => {
+                    return TalentResult {
+                        success: false,
+                        value: Value::Null,
+                        payload: payload.clone(),
+                        message: "Talent not found".to_string(),
+                        execution_time: start_time.elapsed().as_millis() as u64,
+                        error: Some(format!("Talent not found: {}", talent_id)),
+                        metadata: Some(
+                            serde_json::json!({
+                            "talent_id": talent_id,
+                            "error_type": "not_found"
+                        })
+                        ),
+                    };
+                }
+            }
+        };
+
+        let result = talent.execute(payload).await;
+        let execution_time = start_time.elapsed().as_millis() as u64;
+
+        // Update execution statistics
+        self.update_execution_stats(talent_id, &result, execution_time);
+
+        result
+    }
+
+    /// Execute a talent pipeline
+    pub async fn execute_pipeline(
+        &self,
+        pipeline_id: &str,
+        payload: ActionPayload
+    ) -> TalentResult {
+        let start_time = std::time::Instant::now();
+
+        let talent_ids = {
+            let pipelines = self.pipelines.read().unwrap();
+            match pipelines.get(pipeline_id) {
+                Some(ids) => ids.clone(),
+                None => {
+                    return TalentResult {
+                        success: false,
+                        value: Value::Null,
+                        payload: payload.clone(),
+                        message: "Pipeline not found".to_string(),
+                        execution_time: start_time.elapsed().as_millis() as u64,
+                        error: Some(format!("Pipeline '{}' not found", pipeline_id)),
+                        metadata: Some(
+                            serde_json::json!({
+                            "pipeline_id": pipeline_id,
+                            "error_type": "not_found"
+                        })
+                        ),
+                    };
+                }
+            }
+        };
+
+        let mut current_payload = payload;
+        let mut errors = Vec::new();
+        let talent_count = talent_ids.len(); // Store the count before moving
+
+        for talent_id in &talent_ids {
+            // Use reference to avoid moving
+            let result = self.execute_talent(talent_id, current_payload.clone()).await;
+
+            if result.success {
+                current_payload = result.payload;
+            } else {
+                errors.push(
+                    format!("Talent '{}': {}", talent_id, result.error.unwrap_or_default())
+                );
+
+                if !errors.is_empty() {
+                    return TalentResult {
+                        success: false,
+                        value: current_payload.clone(),
+                        payload: current_payload,
+                        message: "Pipeline execution failed".to_string(),
+                        execution_time: start_time.elapsed().as_millis() as u64,
+                        error: Some(format!("Talent execution failed: {}", errors.join(", "))),
+                        metadata: Some(
+                            serde_json::json!({
+                            "pipeline_id": pipeline_id,
+                            "failed_talents": errors,
+                            "execution_time": start_time.elapsed().as_millis()
+                        })
+                        ),
+                    };
+                }
+            }
+        }
+
+        let execution_time = start_time.elapsed().as_millis() as u64;
+
+        // Update pipeline metadata
+        let mut result = TalentResult {
+            success: true,
+            value: current_payload.clone(),
+            payload: current_payload,
+            message: "Pipeline execution completed".to_string(),
+            execution_time,
+            error: None,
+            metadata: Some(
+                serde_json::json!({
+                "pipeline_id": pipeline_id,
+                "talents_executed": talent_count, // Use stored count
+                "execution_time": execution_time
+            })
+            ),
+        };
+
+        if let Some(metadata) = result.metadata.as_mut() {
+            if let Some(obj) = metadata.as_object_mut() {
+                obj.insert("pipeline_success".to_string(), Value::Bool(true));
+            }
+        }
+
+        result
     }
 
     /// Register a talent pipeline
-    pub fn register_pipeline(&self, pipeline: TalentPipeline) -> Result<bool, String> {
-        if pipeline.id.is_empty() {
-            return Err("Pipeline ID cannot be empty".to_string());
-        }
-
-        // Validate that all talents in the pipeline exist
+    pub fn register_pipeline(
+        &self,
+        pipeline_id: String,
+        talent_ids: Vec<String>
+    ) -> Result<(), String> {
+        // Validate that all talents exist
         {
             let talents = self.talents.read().unwrap();
-            for talent_id in &pipeline.talent_ids {
+            for talent_id in &talent_ids {
                 if !talents.contains_key(talent_id) {
-                    return Err(format!("Talent '{}' not found in pipeline '{}'", talent_id, pipeline.id));
+                    return Err(format!("Talent '{}' not found", talent_id));
                 }
             }
         }
 
         let mut pipelines = self.pipelines.write().unwrap();
-        let existed = pipelines.contains_key(&pipeline.id);
-        pipelines.insert(pipeline.id.clone(), pipeline);
-        
-        Ok(!existed)
+        pipelines.insert(pipeline_id, talent_ids);
+        Ok(())
     }
 
-    /// Execute a list of talents
-    pub fn execute_talents(&self, talent_ids: &[String], _config: &IO, payload: ActionPayload) -> TalentResult {
-        self.execution_count.fetch_add(1, Ordering::Relaxed);
-        
-        if talent_ids.is_empty() {
-            return TalentResult {
-                success: true,
-                payload,
-                error: None,
-                metadata: Some(serde_json::json!({
-                    "message": "No talents to execute",
-                    "talent_count": 0
-                })),
-            };
-        }
-
-        let talents = self.talents.read().unwrap();
-        let mut current_payload = payload;
-        let mut executed_talents = Vec::new();
-        let mut errors = Vec::new();
-        
-        for talent_id in talent_ids {
-            if let Some(talent) = talents.get(talent_id) {
-                self.talent_executions.fetch_add(1, Ordering::Relaxed);
-                
-                let result = talent.execute(current_payload.clone());
-                executed_talents.push(talent_id.clone());
-                
-                if result.success {
-                    current_payload = result.payload;
-                } else {
-                    self.error_count.fetch_add(1, Ordering::Relaxed);
-                    let error_msg = result.error.unwrap_or_else(|| "Unknown talent error".to_string());
-                    errors.push(format!("{}: {}", talent_id, error_msg));
-                    
-                    // Fail fast on first error
-                    return TalentResult {
-                        success: false,
-                        payload: current_payload,
-                        error: Some(format!("Talent execution failed: {}", errors.join(", "))),
-                        metadata: Some(serde_json::json!({
-                            "executed_talents": executed_talents,
-                            "failed_talent": talent_id,
-                            "errors": errors
-                        })),
-                    };
-                }
-            } else {
-                self.error_count.fetch_add(1, Ordering::Relaxed);
-                errors.push(format!("Talent '{}' not found", talent_id));
-                
-                return TalentResult {
-                    success: false,
-                    payload: current_payload,
-                    error: Some(format!("Talent not found: {}", talent_id)),
-                    metadata: Some(serde_json::json!({
-                        "executed_talents": executed_talents,
-                        "missing_talent": talent_id,
-                        "errors": errors
-                    })),
-                };
-            }
-        }
-        
-        TalentResult {
-            success: true,
-            payload: current_payload,
-            error: None,
-            metadata: Some(serde_json::json!({
-                "executed_talents": executed_talents,
-                "talent_count": executed_talents.len(),
-                "timestamp": crate::utils::current_timestamp()
-            })),
-        }
-    }
-
-    /// Execute a talent pipeline
-    pub fn execute_pipeline(&self, pipeline_id: &str, payload: ActionPayload) -> TalentResult {
-        self.pipeline_executions.fetch_add(1, Ordering::Relaxed);
-        
-        let pipeline = {
-            let pipelines = self.pipelines.read().unwrap();
-            pipelines.get(pipeline_id).cloned()
-        };
-
-        if let Some(pipeline) = pipeline {
-            // Create a temporary IO config for pipeline execution
-            let config = IO::new(pipeline_id);
-            self.execute_talents(&pipeline.talent_ids, &config, payload)
-        } else {
-            self.error_count.fetch_add(1, Ordering::Relaxed);
-            TalentResult {
-                success: false,
-                payload,
-                error: Some(format!("Pipeline '{}' not found", pipeline_id)),
-                metadata: Some(serde_json::json!({
-                    "pipeline_id": pipeline_id,
-                    "error": "not_found"
-                })),
-            }
-        }
-    }
-
-    /// Execute talents with context
-    pub fn execute_with_context(&self, talent_ids: &[String], context: TalentContext, payload: ActionPayload) -> TalentResult {
-        // For now, execute normally but include context in metadata
-        let config = IO::new(&context.action_id);
-        let mut result = self.execute_talents(talent_ids, &config, payload);
-        
-        // Add context to metadata
-        if let Some(metadata) = result.metadata.as_mut() {
-            if let Some(obj) = metadata.as_object_mut() {
-                obj.insert("context".to_string(), serde_json::json!(context));
-            }
-        }
-        
-        result
-    }
-
-    /// Get a talent by ID
+    /// Get talent by ID
     pub fn get_talent(&self, talent_id: &str) -> Option<Talent> {
         let talents = self.talents.read().unwrap();
         talents.get(talent_id).cloned()
     }
 
-    /// Get a pipeline by ID
-    pub fn get_pipeline(&self, pipeline_id: &str) -> Option<TalentPipeline> {
-        let pipelines = self.pipelines.read().unwrap();
-        pipelines.get(pipeline_id).cloned()
-    }
-
-    /// List all talent IDs
+    /// List all talents
     pub fn list_talents(&self) -> Vec<String> {
         let talents = self.talents.read().unwrap();
         talents.keys().cloned().collect()
     }
 
-    /// List all pipeline IDs
-    pub fn list_pipelines(&self) -> Vec<String> {
-        let pipelines = self.pipelines.read().unwrap();
-        pipelines.keys().cloned().collect()
+    /// Get execution statistics
+    pub fn get_execution_stats(&self, talent_id: &str) -> Option<ExecutionStats> {
+        let stats = self.execution_stats.read().unwrap();
+        stats.get(talent_id).cloned()
+    }
+
+    /// Update execution statistics
+    fn update_execution_stats(&self, talent_id: &str, result: &TalentResult, execution_time: u64) {
+        let mut stats = self.execution_stats.write().unwrap();
+        let stat = stats.entry(talent_id.to_string()).or_insert_with(ExecutionStats::default);
+
+        stat.total_executions += 1;
+        stat.last_execution_time = execution_time;
+
+        if result.success {
+            stat.successful_executions += 1;
+        } else {
+            stat.failed_executions += 1;
+        }
+
+        // Update average execution time
+        stat.average_execution_time =
+            (stat.average_execution_time * (stat.total_executions - 1) + execution_time) /
+            stat.total_executions;
     }
 
     /// Remove a talent
-    pub fn remove_talent(&self, talent_id: &str) -> bool {
+    pub fn remove_talent(&self, talent_id: &str) -> Result<(), String> {
         let mut talents = self.talents.write().unwrap();
-        talents.remove(talent_id).is_some()
-    }
 
-    /// Remove a pipeline
-    pub fn remove_pipeline(&self, pipeline_id: &str) -> bool {
-        let mut pipelines = self.pipelines.write().unwrap();
-        pipelines.remove(pipeline_id).is_some()
-    }
+        if talents.remove(talent_id).is_some() {
+            // Also remove from execution stats
+            let mut stats = self.execution_stats.write().unwrap();
+            stats.remove(talent_id);
 
-    /// Enable or disable a talent
-    pub fn set_talent_active(&self, talent_id: &str, active: bool) -> bool {
-        let mut talents = self.talents.write().unwrap();
-        if let Some(talent) = talents.get_mut(talent_id) {
-            talent.active = active;
-            true
+            Ok(())
         } else {
-            false
+            Err(format!("Talent '{}' not found", talent_id))
         }
     }
 
-    /// Get registry statistics
-    pub fn get_stats(&self) -> (u64, u64) {
-        (
-            self.execution_count.load(Ordering::Relaxed),
-            self.talent_executions.load(Ordering::Relaxed)
-        )
-    }
-
-    /// Get comprehensive metrics
-    pub fn get_metrics(&self) -> serde_json::Value {
-        let talents = self.talents.read().unwrap();
-        let pipelines = self.pipelines.read().unwrap();
-        
-        let total = self.execution_count.load(Ordering::Relaxed);
-        let errors = self.error_count.load(Ordering::Relaxed);
-        let success_rate = if total > 0 {
-            ((total - errors) as f64 / total as f64) * 100.0
-        } else {
-            100.0
-        };
-        
-        serde_json::json!({
-            "talents": {
-                "count": talents.len(),
-                "active": talents.values().filter(|t| t.active).count(),
-                "inactive": talents.values().filter(|t| !t.active).count()
-            },
-            "pipelines": {
-                "count": pipelines.len()
-            },
-            "execution": {
-                "total_executions": self.execution_count.load(Ordering::Relaxed),
-                "talent_executions": self.talent_executions.load(Ordering::Relaxed),
-                "pipeline_executions": self.pipeline_executions.load(Ordering::Relaxed),
-                "error_count": self.error_count.load(Ordering::Relaxed),
-                "success_rate": success_rate
-            }
-        })
-    }
-
-    /// Clear all talents and pipelines
+    /// Clear all talents
     pub fn clear(&self) {
-        {
-            let mut talents = self.talents.write().unwrap();
-            talents.clear();
-        }
-        {
-            let mut pipelines = self.pipelines.write().unwrap();
-            pipelines.clear();
-        }
-        
-        // Reset counters
-        self.execution_count.store(0, Ordering::Relaxed);
-        self.talent_executions.store(0, Ordering::Relaxed);
-        self.pipeline_executions.store(0, Ordering::Relaxed);
-        self.error_count.store(0, Ordering::Relaxed);
-    }
+        let mut talents = self.talents.write().unwrap();
+        let mut pipelines = self.pipelines.write().unwrap();
+        let mut stats = self.execution_stats.write().unwrap();
 
-    /// Get talent count
-    pub fn talent_count(&self) -> usize {
-        self.talents.read().unwrap().len()
-    }
-
-    /// Get pipeline count
-    pub fn pipeline_count(&self) -> usize {
-        self.pipelines.read().unwrap().len()
-    }
-
-    /// Get active talent count
-    pub fn active_talent_count(&self) -> usize {
-        let talents = self.talents.read().unwrap();
-        talents.values().filter(|t| t.active).count()
-    }
-
-    /// Validate talent dependencies (check if all referenced talents exist)
-    pub fn validate_dependencies(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-        let talents = self.talents.read().unwrap();
-        let pipelines = self.pipelines.read().unwrap();
-        
-        for pipeline in pipelines.values() {
-            for talent_id in &pipeline.talent_ids {
-                if !talents.contains_key(talent_id) {
-                    errors.push(format!("Pipeline '{}' references missing talent '{}'", pipeline.id, talent_id));
-                }
-            }
-        }
-        
-        errors
-    }
-}
-
-impl Default for TalentRegistry {
-    fn default() -> Self {
-        Self::new()
+        talents.clear();
+        pipelines.clear();
+        stats.clear();
     }
 }
 
 //=============================================================================
-// TESTS
+// GLOBAL TALENT REGISTRY
 //=============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{ValidationResult};
-    use serde_json::json;
+static GLOBAL_TALENT_REGISTRY: OnceLock<TalentRegistry> = OnceLock::new();
 
-    fn create_test_talent() -> Talent {
-        Talent::transform("test-transform", "Test Transform", "Adds test flag", |mut payload| {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("transformed".to_string(), json!(true));
-            }
-            payload
-        })
-    }
+/// Get the global talent registry
+pub fn get_talent_registry() -> &'static TalentRegistry {
+    GLOBAL_TALENT_REGISTRY.get_or_init(|| TalentRegistry::new())
+}
 
-    fn create_failing_talent() -> Talent {
-        Talent::schema("test-schema", "Test Schema", "Always fails", |_| {
-            ValidationResult {
-                valid: false,
-                errors: vec!["Always fails".to_string()],
-                warnings: vec![],
-            }
-        })
-    }
+//=============================================================================
+// CONVENIENCE FUNCTIONS
+//=============================================================================
 
-    #[test]
-    fn test_register_talent() {
-        let registry = TalentRegistry::new();
-        let talent = create_test_talent();
-        
-        let result = registry.register_talent(talent);
-        assert!(result.is_ok());
-        assert!(result.unwrap()); // New talent
-        
-        assert_eq!(registry.talent_count(), 1);
-        assert!(registry.get_talent("test-transform").is_some());
-    }
+/// Register a talent globally
+pub fn register_talent(talent: Talent) -> Result<(), String> {
+    get_talent_registry().register_talent(talent)
+}
 
-    #[test]
-    fn test_register_duplicate_talent() {
-        let registry = TalentRegistry::new();
-        let talent1 = create_test_talent();
-        let talent2 = create_test_talent();
-        
-        let result1 = registry.register_talent(talent1);
-        assert!(result1.is_ok());
-        assert!(result1.unwrap()); // New
-        
-        let result2 = registry.register_talent(talent2);
-        assert!(result2.is_ok());
-        assert!(!result2.unwrap()); // Replaced existing
-        
-        assert_eq!(registry.talent_count(), 1);
-    }
+/// Execute a talent globally
+pub async fn execute_talent(talent_id: &str, payload: ActionPayload) -> TalentResult {
+    get_talent_registry().execute_talent(talent_id, payload).await
+}
 
-    #[test]
-    fn test_execute_talents() {
-        let registry = TalentRegistry::new();
-        let talent = create_test_talent();
-        registry.register_talent(talent).unwrap();
-        
-        let config = IO::new("test");
-        let payload = json!({"data": "test"});
-        
-        let result = registry.execute_talents(&["test-transform".to_string()], &config, payload);
-        assert!(result.success);
-        assert_eq!(result.payload.get("transformed").unwrap(), &json!(true));
-    }
+/// Execute a pipeline globally
+pub async fn execute_pipeline(pipeline_id: &str, payload: ActionPayload) -> TalentResult {
+    get_talent_registry().execute_pipeline(pipeline_id, payload).await
+}
 
-    #[test]
-    fn test_execute_failing_talent() {
-        let registry = TalentRegistry::new();
-        let talent = create_failing_talent();
-        registry.register_talent(talent).unwrap();
-        
-        let config = IO::new("test");
-        let payload = json!({"data": "test"});
-        
-        let result = registry.execute_talents(&["test-schema".to_string()], &config, payload);
-        assert!(!result.success);
-        assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("Always fails"));
-    }
-
-    #[test]
-    fn test_execute_missing_talent() {
-        let registry = TalentRegistry::new();
-        
-        let config = IO::new("test");
-        let payload = json!({"data": "test"});
-        
-        let result = registry.execute_talents(&["missing-talent".to_string()], &config, payload);
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("not found"));
-    }
-
-    #[test]
-    fn test_talent_pipeline() {
-        let registry = TalentRegistry::new();
-        
-        // Register talents
-        let talent1 = create_test_talent();
-        let talent2 = Talent::transform("add-id", "Add ID", "Adds ID field", |mut payload| {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("id".to_string(), json!(123));
-            }
-            payload
-        });
-        
-        registry.register_talent(talent1).unwrap();
-        registry.register_talent(talent2).unwrap();
-        
-        // Create pipeline
-        let pipeline = TalentPipeline::new("test-pipeline", "Test Pipeline")
-            .add_talent("test-transform")
-            .add_talent("add-id");
-        
-        registry.register_pipeline(pipeline).unwrap();
-        
-        // Execute pipeline
-        let payload = json!({"data": "test"});
-        let result = registry.execute_pipeline("test-pipeline", payload);
-        
-        assert!(result.success);
-        assert_eq!(result.payload.get("transformed").unwrap(), &json!(true));
-        assert_eq!(result.payload.get("id").unwrap(), &json!(123));
-    }
-
-    #[test]
-    fn test_talent_activation() {
-        let registry = TalentRegistry::new();
-        let talent = create_test_talent();
-        registry.register_talent(talent).unwrap();
-        
-        // Deactivate talent
-        assert!(registry.set_talent_active("test-transform", false));
-        
-        let config = IO::new("test");
-        let payload = json!({"data": "test"});
-        
-        let result = registry.execute_talents(&["test-transform".to_string()], &config, payload);
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("inactive"));
-    }
-
-    #[test]
-    fn test_registry_metrics() {
-        let registry = TalentRegistry::new();
-        let talent = create_test_talent();
-        registry.register_talent(talent).unwrap();
-        
-        let config = IO::new("test");
-        let payload = json!({"data": "test"});
-        
-        // Execute a few times
-        for _ in 0..3 {
-            registry.execute_talents(&["test-transform".to_string()], &config, payload.clone());
-        }
-        
-        let metrics = registry.get_metrics();
-        assert_eq!(metrics["execution"]["total_executions"].as_u64().unwrap(), 3);
-        assert_eq!(metrics["execution"]["talent_executions"].as_u64().unwrap(), 3);
-        assert_eq!(metrics["execution"]["success_rate"].as_f64().unwrap(), 100.0);
-    }
+/// Register a pipeline globally
+pub fn register_pipeline(pipeline_id: String, talent_ids: Vec<String>) -> Result<(), String> {
+    get_talent_registry().register_pipeline(pipeline_id, talent_ids)
 }

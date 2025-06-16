@@ -1,68 +1,101 @@
 // src/lib.rs
-// Cyre Rust - Fixed module structure and exports
+// Cyre Rust - Main library with proper module structure
 
 //=============================================================================
-// MODULE DECLARATIONS - FIXED
+// MODULE DECLARATIONS
 //=============================================================================
 
-// Core types module (using mod.rs structure)
+// Core types module
 pub mod types;
 
 // Other modules
-pub mod protection;  // Protection mechanisms  
-pub mod talent;      // Talent system
-pub mod breathing;   // Quantum breathing system
-pub mod timekeeper;  // TimeKeeper system
-pub mod timeline;    // Timeline and scheduling (legacy)
-pub mod branch;      // Branch system
-pub mod channel;     // Channel implementation
-pub mod core;        // Main Cyre implementation
-pub mod context;     // Context and state management - ADDED
-pub mod utils;       // Utility functions
+pub mod protection; // Protection mechanisms
+pub mod talent; // Talent system
+pub mod breathing; // Quantum breathing system
+pub mod timekeeper; // TimeKeeper system
+pub mod timeline; // Timeline and scheduling (legacy)
+pub mod branch; // Branch system
+pub mod channel; // Channel implementation
+pub mod core; // Main Cyre implementation
+pub mod context; // Context and state management with task store
+pub mod utils; // Utility functions
 
 //=============================================================================
-// RE-EXPORTS FOR PUBLIC API - FIXED
+// RE-EXPORTS FOR PUBLIC API
 //=============================================================================
 
 // Core types
 pub use types::{
-    ActionId, ActionPayload, Priority,
-    CyreResponse, TalentResult, ValidationResult,
-    IO
+    ActionId,
+    ActionPayload,
+    Priority,
+    CyreResponse,
+    TalentResult,
+    ValidationResult,
+    IO,
+    SchemaFunction,
+    ConditionFunction,
+    TransformFunction,
+    SelectorFunction,
 };
 
 // Main implementation
 pub use core::Cyre;
 
-// TimeKeeper system (fixed exports)
+// TimeKeeper system
 pub use timekeeper::{
-    TimeKeeper, Formation, FormationBuilder, TimerRepeat,
-    get_timekeeper, set_timeout, set_interval, clear_timer, delay,
+    TimeKeeper,
+    Formation,
+    FormationBuilder,
+    TimerRepeat,
+    get_timekeeper,
+    set_timeout,
+    set_interval,
+    clear_timer,
+    delay,
+};
+
+// Context and task management
+pub use context::{
+    // Task store functions
+    keep as task_keep,
+    forget as task_forget,
+    activate as task_activate,
+    get as task_get,
+    list as task_list,
+    stats as task_stats,
+    timeout as task_timeout,
+    interval as task_interval,
+    complex as task_complex,
+    // Task store types
+    TaskBuilder,
+    TaskFilter,
+    TaskResult,
+    TaskStats,
+    TaskStatus,
+    TaskType,
+    TaskPriority,
+    TaskRepeat,
+    Task,
+    TaskConfig,
+    TaskMetrics,
+    SystemHealth,
+    // Timeline functions
+    get_timeline,
+    Timeline,
+    TimelineStore,
 };
 
 // Advanced systems
-pub use talent::{Talent, TalentType, TalentRegistry};
-pub use breathing::{QuantumBreathing, BreathingPattern};
-pub use timeline::{Timeline, TimelineEntry};
-pub use branch::{BranchSystem, BranchEntry};
+pub use talent::{ Talent, TalentType, TalentRegistry };
+pub use breathing::{ QuantumBreathing, BreathingPattern };
+pub use timeline::{ Timeline as LegacyTimeline, TimelineEntry };
+pub use branch::{ BranchSystem, BranchEntry };
 pub use channel::Channel;
-pub use protection::{ProtectionState, ProtectionType};
-
-// Context and state
-pub use context::{TimelineStore};
+pub use protection::{ ProtectionState, ProtectionType };
 
 // Utility functions
 pub use utils::current_timestamp;
-
-//=============================================================================
-// FEATURE FLAGS AND CONDITIONAL COMPILATION
-//=============================================================================
-
-#[cfg(feature = "server")]
-pub mod server;
-
-#[cfg(feature = "benchmarks")]
-pub mod benchmarks;
 
 //=============================================================================
 // CONVENIENCE MACROS
@@ -93,47 +126,70 @@ macro_rules! sleep {
 }
 
 //=============================================================================
-// LIBRARY METADATA
-//=============================================================================
-
-/// Cyre Rust version
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Library description
-pub const DESCRIPTION: &str = "High-performance reactive event manager with TimeKeeper";
-
-//=============================================================================
-// PRELUDE MODULE FOR CONVENIENCE - FIXED
+// PRELUDE MODULE FOR CONVENIENCE
 //=============================================================================
 
 /// Complete imports for Cyre users
 pub mod prelude {
     pub use crate::{
         // Core Cyre
-        Cyre, IO, CyreResponse, ActionPayload, Priority,
-        
+        Cyre,
+        IO,
+        CyreResponse,
+        ActionPayload,
+        Priority,
         // TimeKeeper
-        TimeKeeper, Formation, FormationBuilder, TimerRepeat,
-        get_timekeeper, set_timeout, set_interval, clear_timer, delay,
-        
+        TimeKeeper,
+        Formation,
+        FormationBuilder,
+        TimerRepeat,
+        get_timekeeper,
+        set_timeout,
+        set_interval,
+        clear_timer,
+        delay,
+        // Task Store (from context)
+        task_keep,
+        task_forget,
+        task_activate,
+        task_get,
+        task_list,
+        task_stats,
+        task_timeout,
+        task_interval,
+        task_complex,
+        TaskBuilder,
+        TaskStatus,
+        TaskType,
+        TaskPriority,
+        TaskRepeat,
+        Task,
+        TaskConfig,
+        TaskResult,
+        TaskStats,
+        // Timeline
+        get_timeline,
+        Timeline,
+        TimelineStore,
         // Advanced systems
-        Talent, TalentType, QuantumBreathing,
-        
+        Talent,
+        TalentType,
+        QuantumBreathing,
         // Utilities
         current_timestamp,
     };
-    
+
     // Macros
-    pub use crate::{timeout, interval, sleep};
-    
-    // Common traits and types for async programming
+    pub use crate::{ timeout, interval, sleep };
+
+    // Common async traits
     pub use std::future::Future;
     pub use std::pin::Pin;
-    pub use serde_json::{json, Value};
+    pub use serde_json::{ json, Value };
 }
 
 //=============================================================================
-// CYRE BUILDER - SIMPLIFIED
+// CYRE BUILDER
 //=============================================================================
 
 /// Enhanced Cyre builder
@@ -176,23 +232,38 @@ impl CyreBuilder {
 
         if self.enable_timekeeper {
             cyre.init_timekeeper().await?;
-            println!("✅ TimeKeeper initialized!");
+            println!("✅ TimeKeeper integration enabled");
         }
 
         if self.enable_breathing {
-            println!("✅ Quantum breathing system initialized");
+            println!("✅ Quantum breathing enabled");
         }
 
         if self.enable_talents {
-            println!("✅ Talent system initialized");
+            println!("✅ Talent system enabled");
         }
 
         Ok(cyre)
     }
 }
 
-impl Default for CyreBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+//=============================================================================
+// FEATURE FLAGS AND CONDITIONAL COMPILATION
+//=============================================================================
+
+#[cfg(feature = "server")]
+pub mod server;
+
+#[cfg(feature = "benchmarks")]
+pub mod benchmarks;
+
+//=============================================================================
+// LIBRARY METADATA
+//=============================================================================
+
+/// Cyre Rust version
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Library description
+pub const DESCRIPTION: &str =
+    "High-performance reactive event manager with TimeKeeper and Task Store";
