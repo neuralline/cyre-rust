@@ -21,13 +21,12 @@ tokio = { version = "1.40", features = ["full"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# HTTP server dependencies - always available
-hyper = { version = "0.14", features = ["full"] }
 rand = "0.9.1"
+axum = "0.8.4"
+tower-http = "0.6.6"
 
 [dev-dependencies]
-criterion = "0.5"         # Benchmarking
+criterion = "0.6"         # Benchmarking
 tokio-test = "0.4"        # Async testing utilities
 
 [features]
@@ -56,9 +55,7 @@ debug = true               # Keep debug info for profiling
 lto = "fat"                # Aggressive link-time optimization
 
 # Binary definitions
-[[bin]]
-name = "cyre-server"
-path = "src/bin/cyre-server.rs"
+
 
 [[bin]]
 name = "cyre_rust"
