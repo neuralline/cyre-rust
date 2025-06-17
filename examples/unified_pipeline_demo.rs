@@ -13,8 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing all pipeline features: fast path, protection, scheduling");
     println!();
 
-    let cyre = Cyre::new();
-    cyre.set_debug_mode(true);
+    let mut cyre = Cyre::new();
 
     //=================================================================
     // Demo 1: Fast Path (Zero Overhead)

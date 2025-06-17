@@ -9,7 +9,7 @@
 use std::sync::{ Arc, RwLock, OnceLock };
 use std::collections::HashMap;
 use serde::{ Serialize, Deserialize };
-use serde_json::Value as JsonValue;
+use serde_json::{ Value as JsonValue, json };
 use crate::types::{ ActionId, IO, AsyncHandler, Timer };
 use crate::context::sensor;
 use crate::utils::current_timestamp;
@@ -204,18 +204,39 @@ pub struct BranchStore {
 #[derive(Debug)]
 pub struct PayloadState {
     store: Arc<RwLock<Store<JsonValue>>>,
+    max_payload_size: usize, // Maximum size in bytes
 }
 
 impl PayloadState {
     pub fn new() -> Self {
         Self {
             store: Arc::new(RwLock::new(Store::new())),
+            max_payload_size: 1024 * 1024, // 1MB default limit
         }
     }
 
-    pub fn set(&self, key: StateKey, payload: JsonValue) {
+    pub fn set(&self, key: StateKey, payload: JsonValue) -> Result<(), String> {
+        // Check payload size
+        let payload_size = serde_json
+            ::to_string(&payload)
+            .map_err(|e| format!("Failed to serialize payload: {}", e))?
+            .len();
+
+        if payload_size > self.max_payload_size {
+            return Err(
+                format!(
+                    "Payload size {} bytes exceeds maximum allowed size of {} bytes",
+                    payload_size,
+                    self.max_payload_size
+                )
+            );
+        }
+
         if let Ok(mut store) = self.store.write() {
             store.set(key, payload);
+            Ok(())
+        } else {
+            Err("Failed to write to payload store".to_string())
         }
     }
 
@@ -230,6 +251,43 @@ impl PayloadState {
     pub fn clear(&self) {
         if let Ok(mut store) = self.store.write() {
             store.clear();
+        }
+    }
+
+    pub fn get_total_size(&self) -> usize {
+        if let Ok(store) = self.store.read() {
+            store
+                .get_all()
+                .iter()
+                .filter_map(|p| serde_json::to_string(p).ok())
+                .map(|s| s.len())
+                .sum()
+        } else {
+            0
+        }
+    }
+
+    pub fn get_largest_payload(&self) -> Option<(StateKey, usize)> {
+        if let Ok(store) = self.store.read() {
+            store
+                .get_all()
+                .iter()
+                .filter_map(|payload| {
+                    serde_json
+                        ::to_string(payload)
+                        .ok()
+                        .map(|s| (
+                            payload
+                                .get("id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            s.len(),
+                        ))
+                })
+                .max_by_key(|&(_, size)| size)
+        } else {
+            None
         }
     }
 }
@@ -574,8 +632,8 @@ impl Timeline {
 pub struct PayloadStateOps;
 
 impl PayloadStateOps {
-    pub fn set(id: StateKey, payload: JsonValue) {
-        get_payload_state().set(id, payload);
+    pub fn set(id: StateKey, payload: JsonValue) -> Result<(), String> {
+        get_payload_state().set(id, payload)
     }
 
     pub fn get(id: &StateKey) -> Option<JsonValue> {
@@ -587,7 +645,20 @@ impl PayloadStateOps {
     }
 
     pub fn clear() {
-        get_payload_state().clear();
+        get_payload_state().clear()
+    }
+
+    pub fn get_size_metrics() -> JsonValue {
+        let state = get_payload_state();
+        json!({
+            "total_size_bytes": state.get_total_size(),
+            "payload_count": state.store.read().map(|s| s.size()).unwrap_or(0),
+            "largest_payload": state.get_largest_payload()
+                .map(|(id, size)| json!({
+                    "id": id,
+                    "size_bytes": size
+                }))
+        })
     }
 }
 
@@ -651,11 +722,19 @@ impl Stores {
             .unwrap_or(0)
     }
 
+    pub fn payload_size() -> usize {
+        get_payload_state()
+            .store.read()
+            .map(|s| s.size())
+            .unwrap_or(0)
+    }
+
     pub fn get_system_stats() -> JsonValue {
         serde_json::json!({
             "io_channels": Self::io_size(),
             "subscribers": Self::subscribers_size(),
             "active_timers": Self::timeline_size(),
+            "payloads": Self::payload_size(),
             "metrics": MetricsOps::get()
         })
     }

@@ -13,8 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing what TypeScript Cyre cannot do!");
     println!();
 
-    let cyre = Cyre::new();
-    cyre.set_debug_mode(true);
+    let mut cyre = Cyre::new();
 
     //=================================================================
     // Test 1: Debounce + Throttle Together (IMPOSSIBLE IN TYPESCRIPT!)
@@ -29,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     cyre.action(
         IO::new("advanced-search")
             .with_debounce(200) // 200ms debounce (wait for typing to stop)
-            .with_throttle(1000) // 1000ms throttle (max 1 search per second)
+
             .with_max_wait(800) // 800ms max wait (don't wait forever)
             .with_logging(true) // Log everything
     );

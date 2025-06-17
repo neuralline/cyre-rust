@@ -7,7 +7,9 @@ use crate::context::sensor;
 use crate::utils::current_timestamp;
 use std::sync::Arc;
 use serde_json::json;
+use crate::context::state::{ io, PayloadStateOps };
 
+#[derive(Debug)]
 pub struct Cyre;
 
 impl Cyre {
@@ -23,16 +25,59 @@ impl Cyre {
         Ok(())
     }
 
-    pub fn action(&mut self, config: IO) -> Result<(), String> {
+    /// Create new channel with compiled pipeline operators
+    pub fn action(&mut self, mut config: IO) -> Result<(), String> {
         let action_id = config.id.clone();
-        sensor::debug("cyre", &format!("Creating action: {}", action_id), false);
+        sensor::debug("cyre", &format!("Creating channel: {}", action_id), false);
 
-        // Explicitly use the wrapper function
+        // Validate configuration
+        if action_id.trim().is_empty() {
+            sensor::error("cyre", "Channel ID cannot be empty", Some("Cyre::action"), None);
+            return Err("Channel ID cannot be empty".to_string());
+        }
+
+        // Check if channel already exists
+        if state::io::get(&action_id).is_some() {
+            sensor::error(
+                "cyre",
+                &format!("Channel '{}' already exists", action_id),
+                Some("Cyre::action"),
+                None
+            );
+            return Err(format!("Channel '{}' already exists", action_id));
+        }
+
+        // COMPILE PIPELINE AND POPULATE _pipeline FIELD
+        match crate::pipeline::compile_pipeline(&action_id, &mut config) {
+            Ok(_) => {
+                sensor::debug(
+                    "cyre",
+                    &format!(
+                        "Compiled {} operators for '{}': {:?}",
+                        config._pipeline.len(),
+                        action_id,
+                        config._pipeline
+                    ),
+                    false
+                );
+            }
+            Err(e) => {
+                sensor::error(
+                    "cyre",
+                    &format!("Pipeline compilation failed for '{}': {}", action_id, e),
+                    Some("Cyre::action"),
+                    None
+                );
+                return Err(format!("Pipeline compilation failed: {}", e));
+            }
+        }
+
+        // Store in centralized IO store with compiled pipeline
         match state::io::set(config) {
             Ok(_) => {
                 sensor::success(
                     "cyre",
-                    &format!("Action '{}' created successfully", action_id),
+                    &format!("Channel '{}' created successfully", action_id),
                     false
                 );
                 Ok(())
@@ -40,7 +85,7 @@ impl Cyre {
             Err(e) => {
                 sensor::error(
                     "cyre",
-                    &format!("Failed to create action '{}': {}", action_id, e),
+                    &format!("Failed to create channel '{}': {}", action_id, e),
                     Some("Cyre::action"),
                     None
                 );
@@ -58,7 +103,7 @@ impl Cyre {
                 Sync +
                 'static
     {
-        // Explicitly use the wrapper function
+        // Check if channel exists in centralized IO store
         if state::io::get(action_id).is_none() {
             let error =
                 format!("Action '{}' does not exist. Create it first with .action()", action_id);
@@ -74,7 +119,7 @@ impl Cyre {
             created_at: current_timestamp(),
         };
 
-        // Explicitly use the wrapper function
+        // Store in centralized subscriber store
         match state::subscribers::add(subscriber) {
             Ok(_) => {
                 sensor::success("cyre", &format!("Handler registered for '{}'", action_id), false);
@@ -92,12 +137,12 @@ impl Cyre {
         }
     }
 
+    /// Execute channel with compiled pipeline
     pub async fn call(&self, action_id: &str, payload: ActionPayload) -> CyreResponse {
         let start_time = std::time::Instant::now();
-        //sensor::debug("cyre", &format!("Calling action: {}", action_id), false);
 
-        // Explicitly use the wrapper function
-        let config = match state::io::get(action_id) {
+        // Get IO config with compiled pipeline
+        let config = match io::get(action_id) {
             Some(config) => config,
             None => {
                 let error = format!("Action '{}' not found", action_id);
@@ -113,7 +158,68 @@ impl Cyre {
             }
         };
 
-        // Explicitly use the wrapper function
+        // FAST PATH - Zero overhead execution for channels with no operators
+        let processed_payload = if config._has_fast_path && config._pipeline.is_empty() {
+            // Skip pipeline entirely for maximum performance
+            payload
+        } else {
+            // PIPELINE EXECUTION - Execute compiled operators
+            match crate::pipeline::execute_pipeline(action_id, payload).await {
+                Ok(crate::pipeline::PipelineResult::Continue(processed)) => processed,
+                Ok(crate::pipeline::PipelineResult::Block(reason)) => {
+                    // Pipeline blocked (throttle, debounce, etc.) - this is normal protection
+                    return CyreResponse {
+                        ok: true, // Not an error, just protection working
+                        payload: json!(null),
+                        message: format!("Pipeline protection: {}", reason),
+                        error: None,
+                        timestamp: current_timestamp(),
+                        metadata: Some(
+                            json!({
+                            "pipeline_blocked": true,
+                            "reason": reason,
+                            "execution_time_ms": start_time.elapsed().as_millis()
+                        })
+                        ),
+                    };
+                }
+                Ok(crate::pipeline::PipelineResult::Schedule) => {
+                    // Scheduling requested
+                    return CyreResponse {
+                        ok: true,
+                        payload: json!(null),
+                        message: "Action scheduled for later execution".to_string(),
+                        error: None,
+                        timestamp: current_timestamp(),
+                        metadata: Some(
+                            json!({
+                            "scheduled": true,
+                            "execution_time_ms": start_time.elapsed().as_millis()
+                        })
+                        ),
+                    };
+                }
+                Err(e) => {
+                    // Actual pipeline error
+                    sensor::error(
+                        "cyre",
+                        &format!("Pipeline execution failed for '{}': {}", action_id, e),
+                        Some("Cyre::call"),
+                        None
+                    );
+                    return CyreResponse {
+                        ok: false,
+                        payload: json!(null),
+                        message: format!("Pipeline error: {}", e),
+                        error: Some("pipeline_error".to_string()),
+                        timestamp: current_timestamp(),
+                        metadata: None,
+                    };
+                }
+            }
+        };
+
+        // Get handler from centralized subscriber store
         let subscriber = match state::subscribers::get(action_id) {
             Some(subscriber) => subscriber,
             None => {
@@ -130,28 +236,20 @@ impl Cyre {
             }
         };
 
-        // Execute handler
-        //sensor::debug("cyre", &format!("Executing handler for '{}'", action_id), false);
-        let result = (subscriber.handler)(payload).await;
-        let execution_time = start_time.elapsed();
+        // Execute handler with processed payload
+        let mut result = (subscriber.handler)(processed_payload).await;
 
-        // Update metrics
-        state::MetricsOps::update(state::MetricsUpdate {
-            total_executions: Some(state::MetricsOps::get().total_executions + 1),
-            fast_path_hits: if config.is_fast_path_eligible() {
-                Some(state::MetricsOps::get().fast_path_hits + 1)
-            } else {
-                None
-            },
-            ..Default::default()
-        });
+        // Add execution metadata
+        let execution_time = start_time.elapsed();
+        result.metadata = Some(
+            json!({
+            "execution_time_ms": execution_time.as_millis(),
+            "pipeline_operators": config._pipeline.len(),
+            "fast_path": config._has_fast_path && config._pipeline.is_empty()
+        })
+        );
 
         if result.ok {
-            // sensor::success(
-            //     "cyre",
-            //     &format!("Action '{}' completed in {:.2}ms", action_id, execution_time.as_millis()),
-            //     false
-            // );
         } else {
             sensor::error(
                 "cyre",
@@ -169,7 +267,12 @@ impl Cyre {
     }
 
     pub fn forget(&mut self, action_id: &str) -> bool {
+        // Remove compiled pipeline first
+        crate::pipeline::remove_compiled_pipeline(action_id);
+
+        // Remove from all stores
         state::subscribers::forget(action_id);
+        PayloadStateOps::forget(&action_id.to_string());
         let removed = state::io::forget(action_id);
 
         if removed {
@@ -189,6 +292,7 @@ impl Cyre {
         let metrics = state::MetricsOps::get();
         let io_count = state::stores::Stores::io_size();
         let handler_count = state::stores::Stores::subscribers_size();
+        let pipeline_stats = crate::pipeline::get_pipeline_stats();
 
         json!({
             "system": {
@@ -209,8 +313,17 @@ impl Cyre {
             "protection": {
                 "total_blocks": metrics.protection_blocks
             },
+            "pipeline": {
+                "total_pipelines": pipeline_stats.total_pipelines,
+                "zero_overhead_count": pipeline_stats.zero_overhead_count,
+                "protected_count": pipeline_stats.protected_count,
+                "optimization_ratio": pipeline_stats.optimization_ratio()
+            },
             "active_channels": io_count,
-            "scheduled_actions": metrics.active_formations
+            "scheduled_actions": metrics.active_formations,
+            "payload_store": {
+                "size": state::stores::Stores::payload_size()
+            }
         })
     }
 

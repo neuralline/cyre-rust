@@ -7,11 +7,12 @@
 //=============================================================================
 
 use crate::types::{ IO, AsyncHandler, CyreResponse, ActionPayload };
-use crate::context::state::{ io, subscribers, ISubscriber };
+use crate::context::state::{ io, subscribers, ISubscriber, PayloadStateOps };
 use crate::context::sensor;
 use crate::utils::current_timestamp;
 use std::sync::Arc;
 use serde_json::json;
+use serde_json::Value as JsonValue;
 
 //=============================================================================
 // CHANNEL INFORMATION
@@ -27,6 +28,7 @@ pub struct ChannelInfo {
     pub created_at: u64,
     pub last_execution: Option<u64>,
     pub execution_count: u64,
+    pub latest_payload: Option<JsonValue>,
 }
 
 //=============================================================================
@@ -54,11 +56,11 @@ impl ChannelManager {
         // Store in centralized IO store
         match io::set(config) {
             Ok(_) => {
-                sensor::success(
-                    "channel",
-                    &format!("Channel '{}' created successfully", action_id),
-                    false
-                );
+                // sensor::success(
+                //     "channel",
+                //     &format!("Channel '{}' created successfully", action_id),
+                //     false
+                // );
                 Ok(())
             }
             Err(e) => {
@@ -103,11 +105,8 @@ impl ChannelManager {
         // Store in centralized subscriber store
         match subscribers::add(subscriber) {
             Ok(_) => {
-                sensor::success(
-                    "channel",
-                    &format!("Handler registered for '{}'", action_id),
-                    false
-                );
+                // Clear any existing payload for this channel
+                PayloadStateOps::forget(&action_id.to_string());
                 Ok(())
             }
             Err(e) => {
@@ -140,7 +139,10 @@ impl ChannelManager {
         // Register handler
         Self::register_handler(&action_id, handler)?;
 
-        sensor::success("channel", &format!("Channel '{}' created with handler", action_id), false);
+        // Clear any existing payload for this channel
+        PayloadStateOps::forget(&action_id);
+
+        // sensor::success("channel", &format!("Channel '{}' created with handler", action_id), false);
         Ok(())
     }
 
@@ -156,14 +158,18 @@ impl ChannelManager {
         // Check if handler exists in centralized subscriber store
         let has_handler = subscribers::get(action_id).is_some();
 
+        // Get latest payload if exists
+        let latest_payload = PayloadStateOps::get(&action_id.to_string());
+
         Some(ChannelInfo {
             id: action_id.to_string(),
             name: config.name.clone(),
             has_handler,
+            config: config.clone(),
             created_at: config.timestamp.unwrap_or(current_timestamp()),
             last_execution: config._last_exec_time,
             execution_count: config._execution_count,
-            config,
+            latest_payload,
         })
     }
 
@@ -202,6 +208,9 @@ impl ChannelManager {
 
         // Remove handler from centralized subscriber store
         subscribers::forget(action_id);
+
+        // Remove payload from centralized payload store
+        PayloadStateOps::forget(&action_id.to_string());
 
         // Remove config from centralized IO store
         let removed = io::forget(action_id);
