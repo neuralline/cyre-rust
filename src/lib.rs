@@ -9,16 +9,13 @@
 pub mod types;
 
 // Other modules
-pub mod protection; // Protection mechanisms
-pub mod talent; // Talent system
 pub mod breathing; // Quantum breathing system
 pub mod timekeeper; // TimeKeeper system
-pub mod timeline; // Timeline and scheduling (legacy)
 pub mod branch; // Branch system
 pub mod channel; // Channel implementation
 pub mod core; // Main Cyre implementation
 pub mod pipeline; // Pipeline system for enhanced Cyre
-pub mod context; // Context and state management with task store
+pub mod context; // Context and state management with task store + sensor
 pub mod orchestration; // Orchestration system
 pub mod utils; // Utility functions
 
@@ -57,7 +54,7 @@ pub use timekeeper::{
     delay,
 };
 
-// Context and task management
+// Context and state management
 pub use context::{
     // Task store functions
     keep as task_keep,
@@ -82,10 +79,35 @@ pub use context::{
     TaskConfig,
     TaskMetrics,
     SystemHealth,
-    // Timeline functions
+    // Enhanced state system - NEW
+    io,
+    subscribers,
+    timeline,
+    stores,
+    StateKey,
+    MetricsState,
+    MetricsUpdate,
+    StateActionMetrics,
+    ISubscriber,
+    BranchStore,
+    MetricsOps,
+    PayloadStateOps,
+    // Legacy compatibility
     get_timeline,
     Timeline,
     TimelineStore,
+    // Sensor system
+    sensor_log,
+    sensor_success,
+    sensor_error,
+    sensor_warn,
+    sensor_info,
+    sensor_debug,
+    sensor_critical,
+    sensor_sys,
+    LogLevel,
+    Sensor,
+    SENSOR,
 };
 
 // Orchestration system
@@ -101,31 +123,27 @@ pub use orchestration::{
         forget as orchestration_forget,
         schedule as orchestration_schedule,
         monitor as orchestration_monitor,
-        OrchestrationBuilder,
-        OrchestrationConfig,
-        OrchestrationRuntime,
-        OrchestrationStatus,
-        TriggerType,
-        StepType,
-        ParallelStrategy,
-        ErrorStrategy,
-        OrchestrationMetrics,
     },
+    // Orchestration types
+    OrchestrationBuilder,
+    OrchestrationConfig,
+    OrchestrationRuntime,
+    OrchestrationStatus,
+    TriggerType,
+    StepType,
+    ParallelStrategy,
+    ErrorStrategy,
+    OrchestrationMetrics,
 };
 
-// Advanced systems
-pub use talent::{ Talent, TalentType, TalentRegistry };
-pub use breathing::{ QuantumBreathing, BreathingPattern };
-pub use timeline::{ Timeline as LegacyTimeline, TimelineEntry };
-pub use branch::{ BranchSystem, BranchEntry };
-pub use channel::Channel;
-pub use protection::{ ProtectionState, ProtectionType };
+// Breathing system
+pub use breathing::QuantumBreathing;
 
-// Utility functions
+// Utils
 pub use utils::current_timestamp;
 
 //=============================================================================
-// CONVENIENCE MACROS - FIXED FOR RUST 2024
+// MACROS
 //=============================================================================
 
 /// Timeout macro - setTimeout equivalent
@@ -198,14 +216,23 @@ pub mod prelude {
         get_timeline,
         Timeline,
         TimelineStore,
+        // Sensor System - NEW
+        sensor_log,
+        sensor_success,
+        sensor_error,
+        sensor_warn,
+        sensor_info,
+        sensor_debug,
+        sensor_critical,
+        sensor_sys,
+        LogLevel,
+        Sensor,
+        SENSOR,
         // Advanced systems
-        Talent,
-        TalentType,
         QuantumBreathing,
         // Orchestration
         orchestration_keep,
         orchestration_activate,
-        orchestration_deactivate,
         OrchestrationBuilder,
         // Utilities
         current_timestamp,
@@ -264,16 +291,9 @@ impl CyreBuilder {
 
         if self.enable_timekeeper {
             cyre.init_timekeeper().await?;
-            println!("⚡ TimeKeeper initialized");
         }
 
-        if self.enable_breathing {
-            println!("🌊 Quantum Breathing enabled");
-        }
-
-        if self.enable_talents {
-            println!("🎯 Talent system enabled");
-        }
+        // Additional initialization would go here
 
         Ok(cyre)
     }

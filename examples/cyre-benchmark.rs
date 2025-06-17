@@ -27,7 +27,7 @@ struct BenchmarkResult {
 async fn pure_speed_test() -> BenchmarkResult {
     println!("⚡ PURE SPEED TEST - No holds barred!");
 
-    let cyre = Cyre::new();
+    let mut cyre = Cyre::new();
     let operations = 100_000u64;
 
     // Setup PURE fast path - zero protection
@@ -76,7 +76,7 @@ async fn pure_speed_test() -> BenchmarkResult {
 async fn batch_processing_test() -> BenchmarkResult {
     println!("\n📦 BATCH PROCESSING TEST - Amortize that overhead!");
 
-    let cyre = Cyre::new();
+    let mut cyre = Cyre::new();
     let batch_size = 1000;
     let num_batches = 500;
     let total_operations = batch_size * num_batches;
@@ -135,7 +135,7 @@ async fn batch_processing_test() -> BenchmarkResult {
 async fn multi_channel_test() -> BenchmarkResult {
     println!("\n🔀 MULTI-CHANNEL TEST - Total throughput measurement!");
 
-    let cyre = Cyre::new();
+    let mut cyre = Cyre::new();
     let num_channels = 10;
     let ops_per_channel = 20_000;
     let total_operations = num_channels * ops_per_channel;
@@ -187,7 +187,7 @@ async fn multi_channel_test() -> BenchmarkResult {
 async fn zero_allocation_test() -> BenchmarkResult {
     println!("\n💾 ZERO ALLOCATION TEST - Memory efficiency master class!");
 
-    let cyre = Cyre::new();
+    let mut cyre = Cyre::new();
     let operations = 75_000u64;
 
     cyre.action(IO::new("zero-alloc"));
@@ -345,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     display_results(&results);
 
     println!("\n🎬 COMING SOON: Ultra-optimized Rust with unsafe code!");
-    println!("Stay tuned for the ultimate performance showdown! 🔥");
+    println!("Stay tuned for the ultimate performance showdown! ��");
 
     Ok(())
 }
