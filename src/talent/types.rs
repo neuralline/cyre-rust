@@ -1,5 +1,5 @@
 // src/talent/types.rs
-// Talent type definitions and core functionality
+// Talent type definitions and core functionality - FIXED TalentResult usage
 
 use serde_json::Value;
 use crate::types::{
@@ -104,10 +104,7 @@ impl Talent {
         if !self.enabled {
             return TalentResult {
                 success: false,
-                value: Value::Null,
                 payload: payload.clone(),
-                message: "Talent is disabled".to_string(),
-                execution_time: 0,
                 error: Some("Talent is disabled".to_string()),
                 metadata: Some(
                     serde_json::json!({
@@ -130,13 +127,10 @@ impl Talent {
     /// Execute transform function
     fn execute_transform(&self, payload: &ActionPayload) -> TalentResult {
         if let Some(ref transform_fn) = self.transform_fn {
-            let result_value = transform_fn(payload.clone());
+            let result_payload = transform_fn(payload.clone());
             TalentResult {
                 success: true,
-                value: result_value.clone(),
-                payload: result_value,
-                message: "Transform completed successfully".to_string(),
-                execution_time: 0,
+                payload: result_payload,
                 error: None,
                 metadata: Some(
                     serde_json::json!({
@@ -148,10 +142,7 @@ impl Talent {
         } else {
             TalentResult {
                 success: true,
-                value: payload.clone(),
                 payload: payload.clone(),
-                message: "No transform function defined, payload passed through".to_string(),
-                execution_time: 0,
                 error: None,
                 metadata: Some(
                     serde_json::json!({
@@ -170,14 +161,7 @@ impl Talent {
             let validation = schema_fn(payload);
             TalentResult {
                 success: validation.valid,
-                value: payload.clone(),
                 payload: payload.clone(),
-                message: if validation.valid {
-                    "Schema validation passed".to_string()
-                } else {
-                    "Schema validation failed".to_string()
-                },
-                execution_time: 0,
                 error: if validation.valid {
                     None
                 } else {
@@ -198,10 +182,7 @@ impl Talent {
         } else {
             TalentResult {
                 success: true,
-                value: payload.clone(),
                 payload: payload.clone(),
-                message: "No schema function defined, validation skipped".to_string(),
-                execution_time: 0,
                 error: None,
                 metadata: Some(
                     serde_json::json!({
@@ -220,14 +201,7 @@ impl Talent {
             let passes = condition_fn(payload);
             TalentResult {
                 success: passes,
-                value: payload.clone(),
                 payload: payload.clone(),
-                message: if passes {
-                    "Condition check passed".to_string()
-                } else {
-                    "Condition check failed".to_string()
-                },
-                execution_time: 0,
                 error: if passes {
                     None
                 } else {
@@ -244,10 +218,7 @@ impl Talent {
         } else {
             TalentResult {
                 success: true,
-                value: payload.clone(),
                 payload: payload.clone(),
-                message: "No condition function defined, check passed by default".to_string(),
-                execution_time: 0,
                 error: None,
                 metadata: Some(
                     serde_json::json!({
@@ -266,10 +237,7 @@ impl Talent {
             let selected = selector_fn(payload);
             TalentResult {
                 success: true,
-                value: selected.clone(),
                 payload: selected,
-                message: "Selection completed successfully".to_string(),
-                execution_time: 0,
                 error: None,
                 metadata: Some(
                     serde_json::json!({
@@ -282,10 +250,7 @@ impl Talent {
         } else {
             TalentResult {
                 success: true,
-                value: payload.clone(),
                 payload: payload.clone(),
-                message: "No selector function defined, payload passed through".to_string(),
-                execution_time: 0,
                 error: None,
                 metadata: Some(
                     serde_json::json!({
@@ -303,10 +268,7 @@ impl Talent {
         // Simplified composite execution
         TalentResult {
             success: true,
-            value: payload.clone(),
             payload: payload.clone(),
-            message: "Composite execution completed".to_string(),
-            execution_time: 0,
             error: None,
             metadata: Some(
                 serde_json::json!({

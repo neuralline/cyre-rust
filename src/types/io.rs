@@ -1,89 +1,297 @@
-// src/types/io.rs - Enhanced with TimeKeeper integration
-// Complete IO configuration with delay, interval, and repeat support
+// src/types/io.rs - COMPLETE FILE - Fixed ownership issues
 
-use serde::{Serialize, Deserialize};
-use super::{ActionId, ActionPayload, Priority, SmallTags, SmallMiddleware};
+use serde::{ Serialize, Deserialize };
+use std::collections::HashMap;
 
 //=============================================================================
-// IO CONFIGURATION WITH TIMEKEEPER SUPPORT
+// LOCAL TYPE DEFINITIONS (to avoid circular imports)
 //=============================================================================
 
-/// Complete configuration for actions and channels with TimeKeeper integration
+/// Action identifier type
+pub type ActionId = String;
+
+/// Priority levels for action execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Priority {
+    Low = 1,
+    Normal = 2, // FIXED: was Medium in some places
+    High = 3,
+    Critical = 4,
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Priority::Normal
+    }
+}
+
+//=============================================================================
+// SUPPORTING TYPES
+//=============================================================================
+
+/// Required field type - matches TypeScript boolean | 'non-empty'
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RequiredType {
+    Basic(bool),
+    NonEmpty,
+}
+
+/// Repeat type - matches TypeScript number | boolean
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RepeatType {
+    Count(u32),
+    Infinite,
+}
+
+/// Authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    pub mode: AuthMode,
+    pub token: Option<String>,
+    pub allowed_callers: Option<Vec<String>>,
+    pub group_policy: Option<String>,
+    pub session_timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuthMode {
+    #[serde(rename = "token")]
+    Token,
+    #[serde(rename = "context")]
+    Context,
+    #[serde(rename = "group")]
+    Group,
+    #[serde(rename = "disabled")]
+    Disabled,
+}
+
+//=============================================================================
+// COMPLETE IO CONFIGURATION - MATCHES TYPESCRIPT INTERFACE
+//=============================================================================
+
+/// Complete IO configuration matching the TypeScript interface
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IO {
-    // Basic identification
+    // ===== CORE IDENTIFICATION =====
+    /// Unique identifier for this action
     pub id: ActionId,
+
+    /// Human-readable name for the channel
     pub name: Option<String>,
-    pub tags: SmallTags,
-    pub payload: Option<ActionPayload>,
-    
-    // TimeKeeper timing system
-    pub delay: Option<u64>,           // Initial delay before first execution (setTimeout)
-    pub interval: Option<u64>,        // Repeat interval (setInterval)
-    pub repeat: Option<i32>,          // Repeat count (-1 = infinite, 0 = once, n = n times)
-    pub timeout: Option<u64>,         // Maximum execution time
-    
-    // Protection system
-    pub throttle: Option<u64>,
-    pub debounce: Option<u64>,
-    pub detect_changes: bool,
-    pub required: bool,
-    pub max_wait: Option<u64>,
+
+    /// Channel category/classification (defaults to id if not specified)
+    #[serde(rename = "type")]
+    pub channel_type: Option<String>,
+
+    /// Hierarchical path for organization (e.g., "sensors/temperature/room1")
+    pub path: Option<String>,
+
+    /// Group membership for bulk operations
+    pub group: Option<String>,
+
+    /// Tags for filtering and organization
+    pub tags: Vec<String>,
+
+    /// Description of what this channel does
+    pub description: Option<String>,
+
+    /// Version for channel evolution tracking
+    pub version: Option<String>,
+
+    // ===== VALIDATION & REQUIREMENTS =====
+    /// Require payload to be provided
+    pub required: Option<RequiredType>,
+
+    /// Schema validation for payload
+    pub schema: Option<String>, // Schema name/ID for now
+
+    /// Block this action from execution
     pub block: bool,
-    
-    // Advanced features
-    pub priority: Priority,
-    pub middleware: SmallMiddleware,
+
+    // ===== TIMING & SCHEDULING =====
+    /// Milliseconds between executions for repeated actions
+    pub interval: Option<u64>,
+
+    /// Number of times to repeat execution (None = once, Some(0) = infinite)
+    pub repeat: Option<RepeatType>,
+
+    /// Milliseconds to delay before first execution
+    pub delay: Option<u64>,
+
+    // ===== PROTECTION MECHANISMS =====
+    /// Minimum milliseconds between executions (rate limiting)
+    pub throttle: Option<u64>,
+
+    /// Collapse rapid calls within this window (milliseconds)
+    pub debounce: Option<u64>,
+
+    /// Maximum wait for debounce
+    pub max_wait: Option<u64>,
+
+    /// Only execute if payload has changed from previous execution
+    pub detect_changes: bool,
+
+    // ===== SYSTEM FEATURES =====
+    /// Enable logging for this action
     pub log: bool,
-    pub immutable: bool,
-    pub no_dispatch: bool,
-    
-    // Performance optimization flags
-    pub fast_path_eligible: bool,
-    pub compiled_pipeline: bool,
-    pub timekeeper_enabled: bool,     // Indicates TimeKeeper management
-    
-    // Talent system integration
-    pub talents: Vec<String>,
-    pub schema_validation: bool,
-    
-    // Branch system
-    pub branch_id: Option<String>,
-    pub parent_branch: Option<String>,
+
+    /// Priority level for execution during system stress
+    pub priority: Priority,
+
+    /// Middleware functions to process action before execution
+    pub middleware: Vec<String>,
+
+    // ===== STATE REACTIVITY =====
+    /// Only execute when this condition returns true (talent name)
+    pub condition: Option<String>,
+
+    /// Select specific part of payload to watch for changes (talent name)
+    pub selector: Option<String>,
+
+    /// Transform payload before execution (talent name)
+    pub transform: Option<String>,
+
+    // ===== AUTHENTICATION =====
+    pub auth: Option<AuthConfig>,
+
+    // ===== INTERNAL OPTIMIZATION FIELDS =====
+    /// Pre-computed blocking state for instant rejection
+    pub _is_blocked: bool,
+
+    /// Reason for blocking if _is_blocked is true
+    pub _block_reason: Option<String>,
+
+    /// True if action has no protections and can use fast path
+    pub _has_fast_path: bool,
+
+    /// Pre-compiled protection pipeline function names
+    pub _pipeline: Vec<String>,
+
+    /// Active debounce timer ID
+    pub _debounce_timer: Option<String>,
+
+    /// Flag to bypass debounce protection for internal use
+    pub _bypass_debounce: bool,
+
+    /// Flag to indicate if action is scheduled for execution
+    pub _is_scheduled: bool,
+
+    /// First debounce call timestamp for maxWait calculation
+    pub _first_debounce_call: Option<u64>,
+
+    /// Branch ID if this channel belongs to a branch
+    pub _branch_id: Option<String>,
+
+    // ===== COMPILED PIPELINES =====
+    /// Fusion pipeline function names
+    pub _fusion_pipeline: Vec<String>,
+
+    /// Pattern pipeline function names
+    pub _pattern_pipeline: Vec<String>,
+
+    /// Pre-computed flags for optimization
+    pub _has_protections: bool,
+    pub _has_processing: bool,
+    pub _has_scheduling: bool,
+    pub _processing_talents: Vec<String>,
+    pub _has_change_detection: bool,
+
+    // ===== METADATA FIELDS =====
+    pub timestamp: Option<u64>,
+    pub time_of_creation: Option<u64>,
+    pub _last_exec_time: Option<u64>,
+    pub _execution_time: Option<u64>,
+    pub _execution_count: u64,
+
+    // ===== ADDITIONAL PROPERTIES =====
+    /// Additional dynamic properties
+    pub additional_properties: HashMap<String, serde_json::Value>,
 }
+
+//=============================================================================
+// DEFAULT IMPLEMENTATION
+//=============================================================================
 
 impl Default for IO {
     fn default() -> Self {
+        let now = crate::utils::current_timestamp();
+
         Self {
+            // Core identification
             id: String::new(),
             name: None,
+            channel_type: None,
+            path: None,
+            group: None,
             tags: Vec::new(),
-            payload: None,
-            delay: None,
+            description: None,
+            version: None,
+
+            // Validation & requirements
+            required: None,
+            schema: None,
+            block: false,
+
+            // Timing & scheduling
             interval: None,
             repeat: None,
-            timeout: None,
+            delay: None,
+
+            // Protection mechanisms
             throttle: None,
             debounce: None,
-            detect_changes: false,
-            required: false,
             max_wait: None,
-            block: false,
-            priority: Priority::Medium,
-            middleware: Vec::new(),
+            detect_changes: false,
+
+            // System features
             log: false,
-            immutable: false,
-            no_dispatch: false,
-            fast_path_eligible: true,
-            compiled_pipeline: false,
-            timekeeper_enabled: false,
-            talents: Vec::new(),
-            schema_validation: false,
-            branch_id: None,
-            parent_branch: None,
+            priority: Priority::Normal,
+            middleware: Vec::new(),
+
+            // State reactivity
+            condition: None,
+            selector: None,
+            transform: None,
+
+            // Authentication
+            auth: None,
+
+            // Internal optimization
+            _is_blocked: false,
+            _block_reason: None,
+            _has_fast_path: true,
+            _pipeline: Vec::new(),
+            _debounce_timer: None,
+            _bypass_debounce: false,
+            _is_scheduled: false,
+            _first_debounce_call: None,
+            _branch_id: None,
+
+            // Compiled pipelines
+            _fusion_pipeline: Vec::new(),
+            _pattern_pipeline: Vec::new(),
+            _has_protections: false,
+            _has_processing: false,
+            _has_scheduling: false,
+            _processing_talents: Vec::new(),
+            _has_change_detection: false,
+
+            // Metadata
+            timestamp: Some(now),
+            time_of_creation: Some(now),
+            _last_exec_time: None,
+            _execution_time: None,
+            _execution_count: 0,
+
+            // Additional properties
+            additional_properties: HashMap::new(),
         }
     }
 }
+
+//=============================================================================
+// CORE BUILDER METHODS
+//=============================================================================
 
 impl IO {
     /// Create a new IO configuration with just an ID
@@ -93,294 +301,211 @@ impl IO {
             ..Default::default()
         }
     }
-    
-    /// Builder pattern: Set name
+
+    // ===== IDENTIFICATION BUILDERS =====
+
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
-    
-    /// Builder pattern: Set priority
+
+    pub fn with_type(mut self, channel_type: impl Into<String>) -> Self {
+        self.channel_type = Some(channel_type.into());
+        self
+    }
+
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
+    }
+
+    // ===== VALIDATION BUILDERS =====
+
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = Some(RequiredType::Basic(required));
+        self
+    }
+
+    pub fn with_required_non_empty(mut self) -> Self {
+        self.required = Some(RequiredType::NonEmpty);
+        self
+    }
+
+    pub fn with_schema(mut self, schema: impl Into<String>) -> Self {
+        self.schema = Some(schema.into());
+        self
+    }
+
+    pub fn with_block(mut self, block: bool) -> Self {
+        self.block = block;
+        self._is_blocked = block;
+        if block {
+            self._block_reason = Some("Manually blocked".to_string());
+            self._has_fast_path = false;
+        }
+        self
+    }
+
+    // ===== TIMING BUILDERS =====
+
+    pub fn with_delay(mut self, delay_ms: u64) -> Self {
+        self.delay = Some(delay_ms);
+        self._has_scheduling = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    pub fn with_interval(mut self, interval_ms: u64) -> Self {
+        self.interval = Some(interval_ms);
+        self._has_scheduling = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    pub fn with_repeat_count(mut self, count: u32) -> Self {
+        self.repeat = Some(RepeatType::Count(count));
+        self._has_scheduling = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    pub fn with_repeat_infinite(mut self) -> Self {
+        self.repeat = Some(RepeatType::Infinite);
+        self._has_scheduling = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    // ===== PROTECTION BUILDERS =====
+
+    pub fn with_throttle(mut self, throttle_ms: u64) -> Self {
+        self.throttle = Some(throttle_ms);
+        self._has_protections = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    pub fn with_debounce(mut self, debounce_ms: u64) -> Self {
+        self.debounce = Some(debounce_ms);
+        self._has_protections = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    pub fn with_max_wait(mut self, max_wait_ms: u64) -> Self {
+        self.max_wait = Some(max_wait_ms);
+        self
+    }
+
+    pub fn with_change_detection(mut self) -> Self {
+        self.detect_changes = true;
+        self._has_change_detection = true;
+        self._has_protections = true;
+        self._has_fast_path = false;
+        self
+    }
+
+    // ===== SYSTEM BUILDERS =====
+
+    pub fn with_logging(mut self, enabled: bool) -> Self {
+        self.log = enabled;
+        self
+    }
+
     pub fn with_priority(mut self, priority: Priority) -> Self {
         self.priority = priority;
         self
     }
-    
-    /// Builder pattern: Set throttle
-    pub fn with_throttle(mut self, throttle_ms: u64) -> Self {
-        self.throttle = Some(throttle_ms);
-        self.fast_path_eligible = false; // Throttle disables fast path
+
+    pub fn with_middleware(mut self, middleware: impl Into<String>) -> Self {
+        self.middleware.push(middleware.into());
+        self._has_processing = true;
+        self._has_fast_path = false;
         self
     }
-    
-    /// Builder pattern: Set debounce
-    pub fn with_debounce(mut self, debounce_ms: u64) -> Self {
-        self.debounce = Some(debounce_ms);
-        self.fast_path_eligible = false; // Debounce disables fast path
+
+    // ===== REACTIVITY BUILDERS - FIXED OWNERSHIP ISSUES =====
+
+    pub fn with_condition(mut self, condition: impl Into<String>) -> Self {
+        let condition_str = condition.into(); // Convert ONCE
+        self.condition = Some(condition_str.clone()); // Clone for storage
+        self._has_processing = true;
+        self._processing_talents.push(condition_str); // Use the same string
+        self._has_fast_path = false;
         self
     }
-    
-    /// Builder pattern: Enable change detection
-    pub fn with_change_detection(mut self) -> Self {
-        self.detect_changes = true;
-        self.fast_path_eligible = false; // Change detection disables fast path
+
+    pub fn with_selector(mut self, selector: impl Into<String>) -> Self {
+        let selector_str = selector.into(); // Convert ONCE
+        self.selector = Some(selector_str.clone()); // Clone for storage
+        self._has_processing = true;
+        self._processing_talents.push(selector_str); // Use the same string
+        self._has_fast_path = false;
         self
     }
-    
-    /// Builder pattern: Add talent
-    pub fn with_talent(mut self, talent_id: impl Into<String>) -> Self {
-        self.talents.push(talent_id.into());
-        self.fast_path_eligible = false; // Talents disable fast path
+
+    pub fn with_transform(mut self, transform: impl Into<String>) -> Self {
+        let transform_str = transform.into(); // Convert ONCE
+        self.transform = Some(transform_str.clone()); // Clone for storage
+        self._has_processing = true;
+        self._processing_talents.push(transform_str); // Use the same string
+        self._has_fast_path = false;
         self
     }
-    
-    //=============================================================================
-    // TIMEKEEPER INTEGRATION METHODS
-    //=============================================================================
-    
-    /// Set initial delay (setTimeout equivalent)
-    pub fn with_delay(mut self, delay_ms: u64) -> Self {
-        self.delay = Some(delay_ms);
-        self.timekeeper_enabled = true;
-        self.compiled_pipeline = true;
-        self.fast_path_eligible = false; // TimeKeeper disables fast path
+
+    // ===== AUTHENTICATION BUILDERS =====
+
+    pub fn with_auth(mut self, auth: AuthConfig) -> Self {
+        self.auth = Some(auth);
         self
     }
-    
-    /// Set repeat interval (setInterval equivalent)
-    pub fn with_interval(mut self, interval_ms: u64) -> Self {
-        self.interval = Some(interval_ms);
-        self.repeat = Some(-1); // Infinite by default
-        self.timekeeper_enabled = true;
-        self.compiled_pipeline = true;
-        self.fast_path_eligible = false;
+
+    pub fn with_token_auth(mut self, token: impl Into<String>) -> Self {
+        self.auth = Some(AuthConfig {
+            mode: AuthMode::Token,
+            token: Some(token.into()),
+            allowed_callers: None,
+            group_policy: None,
+            session_timeout: None,
+        });
         self
     }
-    
-    /// Set finite repeat count
-    pub fn with_repeat(mut self, count: u32) -> Self {
-        self.repeat = Some(count as i32);
-        if self.interval.is_none() {
-            self.interval = Some(1000); // Default 1 second interval
-        }
-        self.timekeeper_enabled = true;
-        self.compiled_pipeline = true;
-        self.fast_path_eligible = false;
+
+    // ===== CONVENIENCE BUILDERS =====
+
+    pub fn with_property(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.additional_properties.insert(key.into(), value);
         self
-    }
-    
-    /// Set infinite repeat (runs forever)
-    pub fn with_infinite_repeat(mut self) -> Self {
-        self.repeat = Some(-1);
-        if self.interval.is_none() {
-            self.interval = Some(1000); // Default 1 second interval
-        }
-        self.timekeeper_enabled = true;
-        self.compiled_pipeline = true;
-        self.fast_path_eligible = false;
-        self
-    }
-    
-    /// Set timeout (maximum execution time)
-    pub fn timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout = Some(timeout_ms);
-        self
-    }
-    
-    /// Alternative timeout method
-    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout = Some(timeout_ms);
-        self
-    }
-    
-    /// Complex scheduling: delay + interval + repeat
-    pub fn schedule_complex(mut self, delay_ms: u64, interval_ms: u64, repeat_count: u32) -> Self {
-        self.delay = Some(delay_ms);
-        self.interval = Some(interval_ms);
-        self.repeat = Some(repeat_count as i32);
-        self.timekeeper_enabled = true;
-        self.compiled_pipeline = true;
-        self.fast_path_eligible = false;
-        self
-    }
-    
-    //=============================================================================
-    // COMPILED PIPELINE DETECTION
-    //=============================================================================
-    
-    /// Check if this configuration requires TimeKeeper
-    pub fn needs_timekeeper(&self) -> bool {
-        self.delay.is_some() || 
-        self.interval.is_some() || 
-        self.repeat.is_some()
-    }
-    
-    /// Check if this configuration has scheduling
-    pub fn has_scheduling(&self) -> bool {
-        self.timekeeper_enabled || self.needs_timekeeper()
-    }
-    
-    /// Get scheduling type for pipeline compilation
-    pub fn get_scheduling_type(&self) -> SchedulingType {
-        match (self.delay.is_some(), self.interval.is_some(), self.repeat) {
-            (true, false, _) => SchedulingType::DelayOnly,
-            (false, true, Some(-1)) => SchedulingType::IntervalInfinite,
-            (false, true, Some(n)) if n > 0 => SchedulingType::IntervalFinite,
-            (true, true, Some(-1)) => SchedulingType::ComplexInfinite,
-            (true, true, Some(n)) if n > 0 => SchedulingType::ComplexFinite,
-            _ => SchedulingType::Immediate
-        }
-    }
-    
-    /// Check if this configuration is eligible for fast path optimization
-    pub fn is_fast_path_eligible(&self) -> bool {
-        self.fast_path_eligible &&
-        !self.has_scheduling() &&
-        self.throttle.is_none() &&
-        self.debounce.is_none() &&
-        !self.detect_changes &&
-        self.talents.is_empty() &&
-        self.middleware.is_empty() &&
-        !self.log &&
-        !self.schema_validation
-    }
-    
-    /// Check if this configuration has any protection mechanisms
-    pub fn has_protection(&self) -> bool {
-        self.throttle.is_some() || 
-        self.debounce.is_some() || 
-        self.detect_changes ||
-        self.block
-    }
-    
-    /// Check if this configuration has advanced features
-    pub fn has_advanced_features(&self) -> bool {
-        !self.talents.is_empty() ||
-        !self.middleware.is_empty() ||
-        self.schema_validation ||
-        self.branch_id.is_some() ||
-        self.has_scheduling()
-    }
-    
-    /// Get compiled pipeline priority
-    pub fn get_pipeline_priority(&self) -> PipelinePriority {
-        if self.has_scheduling() {
-            PipelinePriority::TimeKeeper
-        } else if self.has_protection() {
-            PipelinePriority::Protected
-        } else if self.has_advanced_features() {
-            PipelinePriority::Advanced
-        } else {
-            PipelinePriority::FastPath
-        }
     }
 }
 
 //=============================================================================
-// SCHEDULING TYPES
-//=============================================================================
-
-/// Types of scheduling for pipeline compilation optimization
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SchedulingType {
-    Immediate,           // No scheduling, execute immediately
-    DelayOnly,          // setTimeout equivalent (delay only)
-    IntervalInfinite,   // setInterval equivalent (infinite)
-    IntervalFinite,     // setInterval with count (finite)
-    ComplexInfinite,    // delay + infinite interval
-    ComplexFinite,      // delay + finite interval
-}
-
-impl SchedulingType {
-    /// Check if this scheduling type requires TimeKeeper
-    pub fn needs_timekeeper(&self) -> bool {
-        !matches!(self, SchedulingType::Immediate)
-    }
-    
-    /// Get the execution pattern description
-    pub fn description(&self) -> &'static str {
-        match self {
-            SchedulingType::Immediate => "Execute immediately",
-            SchedulingType::DelayOnly => "Execute once after delay",
-            SchedulingType::IntervalInfinite => "Execute repeatedly forever",
-            SchedulingType::IntervalFinite => "Execute repeatedly for count",
-            SchedulingType::ComplexInfinite => "Delay then repeat forever",
-            SchedulingType::ComplexFinite => "Delay then repeat for count",
-        }
-    }
-}
-
-/// Pipeline priority levels for compilation optimization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PipelinePriority {
-    FastPath = 0,    // Highest priority - zero overhead
-    Protected = 1,   // Protection mechanisms only
-    Advanced = 2,    // Advanced features (talents, middleware)
-    TimeKeeper = 3,  // TimeKeeper scheduling (lowest for compilation)
-}
-
-impl PipelinePriority {
-    /// Get optimization level description
-    pub fn optimization_level(&self) -> &'static str {
-        match self {
-            PipelinePriority::FastPath => "Zero-overhead fast path",
-            PipelinePriority::Protected => "Protection-enabled path",
-            PipelinePriority::Advanced => "Feature-rich path",
-            PipelinePriority::TimeKeeper => "Scheduled execution path",
-        }
-    }
-}
-
-//=============================================================================
-// TIMEKEEPER CONVERSION HELPERS
-//=============================================================================
-
-impl IO {
-    /// Convert to TimeKeeper TimerRepeat
-    pub fn to_timer_repeat(&self) -> crate::timekeeper::TimerRepeat {
-        match self.repeat {
-            Some(-1) => crate::timekeeper::TimerRepeat::Forever,
-            Some(1) | None => crate::timekeeper::TimerRepeat::Once,
-            Some(n) if n > 1 => crate::timekeeper::TimerRepeat::Count(n as u64),
-            _ => crate::timekeeper::TimerRepeat::Once,
-        }
-    }
-
-    /// Get interval with default
-    pub fn get_interval_ms(&self) -> u64 {
-        self.interval.unwrap_or(0)
-    }
-
-    /// Get delay
-    pub fn get_delay_ms(&self) -> Option<u64> {
-        self.delay
-    }
-    
-    /// Get repeat count
-    pub fn get_repeat_count(&self) -> Option<i32> {
-        self.repeat
-    }
-    
-    /// Create a TimeKeeper formation builder from this IO config
-    pub fn to_formation_builder(&self, payload: crate::types::ActionPayload) -> crate::timekeeper::FormationBuilder {
-        let mut builder = crate::timekeeper::FormationBuilder::new(&self.id, payload)
-            .priority(self.priority)
-            .repeat(self.to_timer_repeat());
-            
-        if let Some(interval) = self.interval {
-            builder = builder.interval(interval);
-        }
-        
-        if let Some(delay) = self.delay {
-            builder = builder.delay(delay);
-        }
-        
-        builder
-    }
-}
-
-//=============================================================================
-// CONVENIENT BUILDER METHODS
+// CONVENIENT STATIC CONSTRUCTORS
 //=============================================================================
 
 impl IO {
@@ -388,22 +513,147 @@ impl IO {
     pub fn delayed(id: impl Into<String>, delay_ms: u64) -> Self {
         Self::new(id).with_delay(delay_ms)
     }
-    
+
     /// Create an interval action (setInterval equivalent)
     pub fn interval(id: impl Into<String>, interval_ms: u64) -> Self {
-        Self::new(id).with_interval(interval_ms)
+        Self::new(id).with_interval(interval_ms).with_repeat_infinite()
     }
-    
+
     /// Create a finite repeat action
     pub fn repeat(id: impl Into<String>, interval_ms: u64, count: u32) -> Self {
-        Self::new(id)
-            .with_interval(interval_ms)
-            .with_repeat(count)
+        Self::new(id).with_interval(interval_ms).with_repeat_count(count)
     }
-    
-    /// Create a complex scheduled action
+
+    /// Create a complex scheduled action (delay + interval + repeat)
     pub fn complex(id: impl Into<String>, delay_ms: u64, interval_ms: u64, count: u32) -> Self {
-        Self::new(id).schedule_complex(delay_ms, interval_ms, count)
+        Self::new(id).with_delay(delay_ms).with_interval(interval_ms).with_repeat_count(count)
+    }
+
+    /// Create a protected API endpoint
+    pub fn api(id: impl Into<String>, throttle_ms: u64) -> Self {
+        Self::new(id).with_throttle(throttle_ms).with_change_detection().with_logging(true)
+    }
+
+    /// Create a real-time search action
+    pub fn search(id: impl Into<String>, debounce_ms: u64) -> Self {
+        Self::new(id).with_debounce(debounce_ms).with_max_wait(5000).with_priority(Priority::High)
+    }
+}
+
+//=============================================================================
+// HELPER METHODS FOR PIPELINE COMPILATION
+//=============================================================================
+
+impl IO {
+    /// Check if this configuration has any scheduling
+    pub fn has_scheduling(&self) -> bool {
+        self._has_scheduling ||
+            self.delay.is_some() ||
+            self.interval.is_some() ||
+            self.repeat.is_some()
+    }
+
+    /// Check if this configuration has any protection mechanisms
+    pub fn has_protection(&self) -> bool {
+        self._has_protections ||
+            self.throttle.is_some() ||
+            self.debounce.is_some() ||
+            self.detect_changes ||
+            self.block
+    }
+
+    /// Check if this configuration has any processing (talents/middleware)
+    pub fn has_processing(&self) -> bool {
+        self._has_processing ||
+            !self.middleware.is_empty() ||
+            self.condition.is_some() ||
+            self.selector.is_some() ||
+            self.transform.is_some() ||
+            self.schema.is_some()
+    }
+
+    /// Check if this IO is eligible for fast path optimization
+    pub fn is_fast_path_eligible(&self) -> bool {
+        self._has_fast_path &&
+            !self.has_scheduling() &&
+            !self.has_protection() &&
+            !self.has_processing() &&
+            !self.log &&
+            self.auth.is_none()
+    }
+
+    /// Get all talent names used by this IO
+    pub fn get_all_talents(&self) -> Vec<String> {
+        let mut talents = self._processing_talents.clone();
+
+        if let Some(ref condition) = self.condition {
+            talents.push(condition.clone());
+        }
+        if let Some(ref selector) = self.selector {
+            talents.push(selector.clone());
+        }
+        if let Some(ref transform) = self.transform {
+            talents.push(transform.clone());
+        }
+
+        talents.sort();
+        talents.dedup();
+        talents
+    }
+
+    /// Check if this IO requires authentication
+    pub fn requires_auth(&self) -> bool {
+        self.auth
+            .as_ref()
+            .map(|auth| !matches!(auth.mode, AuthMode::Disabled))
+            .unwrap_or(false)
+    }
+
+    /// Get pipeline complexity score (for optimization decisions)
+    pub fn complexity_score(&self) -> u32 {
+        let mut score = 0;
+
+        if self.has_scheduling() {
+            score += 10;
+        }
+        if self.has_protection() {
+            score += 5;
+        }
+        if self.has_processing() {
+            score += 3;
+        }
+        if self.log {
+            score += 1;
+        }
+        if self.requires_auth() {
+            score += 2;
+        }
+
+        score += self.middleware.len() as u32;
+        score += self.get_all_talents().len() as u32;
+
+        score
+    }
+
+    /// Update execution metadata
+    pub fn update_execution_metadata(&mut self, execution_time_ms: u64) {
+        let now = crate::utils::current_timestamp();
+        self._last_exec_time = Some(now);
+        self._execution_time = Some(execution_time_ms);
+        self._execution_count += 1;
+    }
+
+    /// Get summary for logging
+    pub fn summary(&self) -> String {
+        format!(
+            "IO[{}] path:{} protection:{} processing:{} scheduling:{} fast_path:{}",
+            self.id,
+            self.path.as_deref().unwrap_or("none"),
+            self.has_protection(),
+            self.has_processing(),
+            self.has_scheduling(),
+            self.is_fast_path_eligible()
+        )
     }
 }
 
@@ -411,101 +661,27 @@ impl IO {
 // DISPLAY IMPLEMENTATIONS
 //=============================================================================
 
-impl std::fmt::Display for SchedulingType {
+impl std::fmt::Display for IO {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.description())
+        write!(f, "{}", self.summary())
     }
 }
 
-impl std::fmt::Display for PipelinePriority {
+impl std::fmt::Display for RequiredType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.optimization_level())
+        match self {
+            RequiredType::Basic(true) => write!(f, "required"),
+            RequiredType::Basic(false) => write!(f, "optional"),
+            RequiredType::NonEmpty => write!(f, "required-non-empty"),
+        }
     }
 }
 
-//=============================================================================
-// TESTS
-//=============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_scheduling_detection() {
-        // No scheduling
-        let immediate = IO::new("test");
-        assert_eq!(immediate.get_scheduling_type(), SchedulingType::Immediate);
-        assert!(!immediate.needs_timekeeper());
-        assert!(immediate.is_fast_path_eligible());
-
-        // Delay only
-        let delayed = IO::new("test").with_delay(1000);
-        assert_eq!(delayed.get_scheduling_type(), SchedulingType::DelayOnly);
-        assert!(delayed.needs_timekeeper());
-        assert!(!delayed.is_fast_path_eligible());
-
-        // Infinite interval
-        let interval = IO::new("test").with_interval(500);
-        assert_eq!(interval.get_scheduling_type(), SchedulingType::IntervalInfinite);
-        assert!(interval.needs_timekeeper());
-
-        // Finite repeat
-        let repeat = IO::new("test").with_interval(500).with_repeat(5);
-        assert_eq!(repeat.get_scheduling_type(), SchedulingType::IntervalFinite);
-        assert!(repeat.needs_timekeeper());
-
-        // Complex scheduling
-        let complex = IO::new("test").schedule_complex(1000, 500, 3);
-        assert_eq!(complex.get_scheduling_type(), SchedulingType::ComplexFinite);
-        assert!(complex.needs_timekeeper());
-    }
-
-    #[test]
-    fn test_pipeline_priority() {
-        let fast_path = IO::new("test");
-        assert_eq!(fast_path.get_pipeline_priority(), PipelinePriority::FastPath);
-
-        let protected = IO::new("test").with_throttle(1000);
-        assert_eq!(protected.get_pipeline_priority(), PipelinePriority::Protected);
-
-        let scheduled = IO::new("test").with_interval(1000);
-        assert_eq!(scheduled.get_pipeline_priority(), PipelinePriority::TimeKeeper);
-    }
-
-    #[test]
-    fn test_timekeeper_conversion() {
-        let config = IO::new("test")
-            .with_delay(500)
-            .with_interval(1000)
-            .with_repeat(3);
-
-        assert_eq!(config.get_interval_ms(), 1000);
-        assert_eq!(config.get_delay_ms(), Some(500));
-        assert_eq!(config.get_repeat_count(), Some(3));
-        
-        let timer_repeat = config.to_timer_repeat();
-        assert!(matches!(timer_repeat, crate::timekeeper::TimerRepeat::Count(3)));
-    }
-
-    #[test]
-    fn test_convenient_builders() {
-        let delayed = IO::delayed("task", 2000);
-        assert_eq!(delayed.get_scheduling_type(), SchedulingType::DelayOnly);
-        assert_eq!(delayed.get_delay_ms(), Some(2000));
-
-        let interval = IO::interval("monitor", 1500);
-        assert_eq!(interval.get_scheduling_type(), SchedulingType::IntervalInfinite);
-        assert_eq!(interval.get_interval_ms(), 1500);
-
-        let repeat = IO::repeat("backup", 1000, 5);
-        assert_eq!(repeat.get_scheduling_type(), SchedulingType::IntervalFinite);
-        assert_eq!(repeat.get_repeat_count(), Some(5));
-
-        let complex = IO::complex("cleanup", 2000, 1000, 3);
-        assert_eq!(complex.get_scheduling_type(), SchedulingType::ComplexFinite);
-        assert_eq!(complex.get_delay_ms(), Some(2000));
-        assert_eq!(complex.get_interval_ms(), 1000);
-        assert_eq!(complex.get_repeat_count(), Some(3));
+impl std::fmt::Display for RepeatType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RepeatType::Count(n) => write!(f, "{} times", n),
+            RepeatType::Infinite => write!(f, "infinite"),
+        }
     }
 }

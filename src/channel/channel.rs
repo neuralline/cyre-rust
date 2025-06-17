@@ -1,5 +1,5 @@
 // src/channel/channel.rs
-// FIXED: Performance-optimized channel with lock-free operations
+// FIXED: Performance-optimized channel with correct Priority usage
 
 use std::sync::atomic::{ AtomicU64, Ordering };
 use parking_lot::RwLock; // Faster than std::sync::RwLock
@@ -52,7 +52,7 @@ impl Channel {
             error_count: AtomicU64::new(0),
             last_execution_time: AtomicU64::new(0),
             protection,
-            priority: config.priority,
+            priority: config.priority, // Use Priority directly from config
             is_fast_path: Self::is_fast_path_eligible(config),
             avg_execution_time: AtomicU64::new(0),
             peak_execution_time: AtomicU64::new(0),
@@ -196,7 +196,7 @@ impl ChannelBuilder {
     pub fn new(id: &str) -> Self {
         Self {
             id: id.to_string(),
-            priority: Priority::Medium,
+            priority: Priority::Normal, // Use Priority::Normal instead of Medium
             protection_config: None,
         }
     }
@@ -217,7 +217,7 @@ impl ChannelBuilder {
             Fut: std::future::Future<Output = CyreResponse> + Send + 'static
     {
         let mut config = self.protection_config.unwrap_or_else(|| IO::new(&self.id));
-        config.priority = self.priority;
+        config.priority = self.priority; // Now both are the same Priority type
 
         Channel::from_config(&config)
     }
@@ -238,9 +238,3 @@ impl std::fmt::Debug for Channel {
             .finish()
     }
 }
-
-//=============================================================================
-// EXTENSION TRAIT FOR IO - REMOVED TO AVOID CONFLICTS
-//=============================================================================
-
-// Removed duplicate implementations to avoid conflicts with types/mod.rs

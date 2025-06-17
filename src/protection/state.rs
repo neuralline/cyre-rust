@@ -1,8 +1,7 @@
 // src/protection/state.rs
-// Protection mechanism implementation
+// Protection mechanism implementation - FIXED
 
 use std::sync::atomic::{ AtomicU64, Ordering };
-use crate::types::ActionPayload;
 use crate::utils::current_timestamp;
 
 //=============================================================================
@@ -114,7 +113,7 @@ impl ProtectionState {
         let now = current_timestamp();
         self.total_requests.fetch_add(1, Ordering::Relaxed);
 
-        // Check throttling
+        // Check throttling - FIXED: remove unnecessary parentheses
         if let Some(throttle) = (if self.throttle_ms > 0 { Some(self.throttle_ms) } else { None }) {
             let last_exec = self.last_execution.load(Ordering::Relaxed);
             if now.saturating_sub(last_exec) < throttle {
@@ -123,7 +122,7 @@ impl ProtectionState {
             }
         }
 
-        // Check debouncing
+        // Check debouncing - FIXED: remove unnecessary parentheses
         if let Some(debounce) = (if self.debounce_ms > 0 { Some(self.debounce_ms) } else { None }) {
             let debounce_time = self.last_execution.load(Ordering::Relaxed);
             if now.saturating_sub(debounce_time) < debounce {
@@ -176,5 +175,3 @@ impl ProtectionState {
         self.protection_type
     }
 }
-
-// ADD THE REST OF YOUR EXISTING PROTECTION STATE CODE AFTER THIS...

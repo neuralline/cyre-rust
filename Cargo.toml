@@ -35,6 +35,7 @@ parking_lot = "0.12"      # Faster mutexes (when locks are needed)
 rand = "0.9.1"
 axum = "0.8.4"
 tower-http = "0.6.6"
+uuid = "1.17.0"
 
 [dev-dependencies]
 criterion = "0.6"         # Benchmarking
@@ -83,26 +84,9 @@ name = "cyre_rust"
 path = "src/main.rs"
 
 # PERFORMANCE TEST EXAMPLES
-[[example]]
-name = "simple_usage"
-path = "examples/simple_usage.rs"
+
 
 [[example]]
-name = "performance_benchmark"
-path = "examples/performance_benchmark.rs"
+name = "benchmark"
+path = "examples/cyre-benchmark.rs"
 
-[[example]]
-name = "lock_free_performance"
-path = "examples/lock_free_performance.rs"
-
-[[example]]
-name = "zero_allocation_test"
-path = "examples/zero_allocation_test.rs"
-
-[[example]]
-name = "timekeeper_demo"
-path = "examples/timekeeper_demo.rs"
-
-[[example]]
-name = "smart_home_demo"
-path = "examples/smart_home_demo.rs"

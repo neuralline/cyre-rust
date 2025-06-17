@@ -1,546 +1,733 @@
-// src/core/cyre.rs - COMPLETE TimeKeeper integration with centralized state
-// Fixes the threading issues and completes the integration
+// src/core/cyre.rs - Complete Cyre implementation with full pipeline integration - FIXED
 
-use std::sync::{Arc, RwLock, atomic::{AtomicU64, AtomicBool, Ordering}};
-use crate::types::{ActionId, ActionPayload, AsyncHandler, CyreResponse, FastMap, IO, likely};
+use std::sync::{ Arc, atomic::{ AtomicU64, AtomicBool, Ordering } };
+use dashmap::DashMap;
+use serde_json::json;
+
+use crate::types::{
+    ActionId,
+    ActionPayload,
+    AsyncHandler,
+    CyreResponse,
+    IO,
+    CyreError,
+    CyreResult,
+    IntoActionPayload,
+};
+use crate::pipeline::{ PipelineCache, PipelineExecutor, PipelineResult, ExecutionPath };
 use crate::channel::Channel;
-use crate::timekeeper::{get_timekeeper, FormationBuilder, TimerRepeat};
 use crate::utils::current_timestamp;
 
 //=============================================================================
-// ENHANCED CYRE WITH COMPLETE TIMEKEEPER INTEGRATION
+// COMPLETE CYRE IMPLEMENTATION
 //=============================================================================
 
-/// High-performance reactive event manager with TimeKeeper integration
+/// High-performance reactive event manager with complete pipeline system
 pub struct Cyre {
-    // Core stores (performance optimized)
-    channels: Arc<RwLock<FastMap<ActionId, Arc<Channel>>>>,
-    configurations: Arc<RwLock<FastMap<ActionId, IO>>>,
-    fast_path_channels: Arc<RwLock<FastMap<ActionId, Arc<Channel>>>>, // Performance cache
-    
-    // ✅ Store action handlers separately for TimeKeeper access
-    handlers: Arc<RwLock<FastMap<ActionId, AsyncHandler>>>,
-    
-    // Pipeline optimization
-    pipeline_cache: Arc<RwLock<FastMap<ActionId, CompiledPipeline>>>,
-    
-    // Global performance counters
+    // ===== CORE STORAGE (LOCK-FREE) =====
+    /// All registered channels
+    channels: DashMap<ActionId, Arc<Channel>>,
+
+    /// All registered handlers
+    handlers: DashMap<ActionId, AsyncHandler>,
+
+    /// Complete IO configurations
+    configurations: DashMap<ActionId, IO>,
+
+    // ===== PIPELINE SYSTEM =====
+    /// Pipeline compilation and caching
+    pipeline_cache: PipelineCache,
+
+    // ===== PERFORMANCE COUNTERS (LOCK-FREE) =====
     total_executions: AtomicU64,
     fast_path_hits: AtomicU64,
+    pipeline_hits: AtomicU64,
     protection_blocks: AtomicU64,
-    timekeeper_executions: AtomicU64,
-    
-    // System state
+    authentication_blocks: AtomicU64,
+    validation_blocks: AtomicU64,
+
+    // ===== SYSTEM STATE =====
     initialized: AtomicBool,
-    timekeeper_enabled: AtomicBool,
     start_time: u64,
+
+    // ===== CONFIGURATION =====
+    debug_mode: AtomicBool,
+    metrics_enabled: AtomicBool,
 }
 
 impl Cyre {
-    /// Create a new Cyre instance
+    /// Create new Cyre instance
     pub fn new() -> Self {
         Self {
-            channels: Arc::new(RwLock::new(FastMap::default())),
-            configurations: Arc::new(RwLock::new(FastMap::default())),
-            fast_path_channels: Arc::new(RwLock::new(FastMap::default())),
-            handlers: Arc::new(RwLock::new(FastMap::default())),
-            pipeline_cache: Arc::new(RwLock::new(FastMap::default())),
+            channels: DashMap::new(),
+            handlers: DashMap::new(),
+            configurations: DashMap::new(),
+            pipeline_cache: PipelineCache::new(),
             total_executions: AtomicU64::new(0),
             fast_path_hits: AtomicU64::new(0),
+            pipeline_hits: AtomicU64::new(0),
             protection_blocks: AtomicU64::new(0),
-            timekeeper_executions: AtomicU64::new(0),
+            authentication_blocks: AtomicU64::new(0),
+            validation_blocks: AtomicU64::new(0),
             initialized: AtomicBool::new(false),
-            timekeeper_enabled: AtomicBool::new(false),
             start_time: current_timestamp(),
+            debug_mode: AtomicBool::new(false),
+            metrics_enabled: AtomicBool::new(true),
         }
     }
 
-    /// Initialize TimeKeeper integration
-    pub async fn init_timekeeper(&mut self) -> Result<(), String> {
-        // Register this Cyre instance with the global TimeKeeper
-        let _timekeeper = get_timekeeper().await;
-        self.timekeeper_enabled.store(true, Ordering::Relaxed);
-        
-        println!("🕒 TimeKeeper integration initialized");
+    //=========================================================================
+    // CORE API METHODS
+    //=========================================================================
+
+    /// Register action with complete IO configuration and pipeline compilation
+    pub fn action(&self, config: IO) {
+        let action_id = config.id.clone();
+
+        // 1. Compile pipeline from complete configuration
+        let pipeline = self.pipeline_cache.get_or_compile(&action_id, &config);
+
+        if self.debug_mode.load(Ordering::Relaxed) {
+            println!("🔧 Compiling pipeline: {}", pipeline.description());
+        }
+
+        // 2. Create optimized channel
+        let channel = Arc::new(Channel::from_config(&config));
+
+        // 3. Store everything
+        self.channels.insert(action_id.clone(), channel);
+        self.configurations.insert(action_id.clone(), config);
+
+        // 4. Log registration - FIXED: avoid temporary value borrow
+        let path_desc = if pipeline.is_fast_path() {
+            "fast_path: true".to_string()
+        } else {
+            format!("path: {}", pipeline.execution_path)
+        };
+
+        println!("✅ Action registered: {} ({})", action_id, path_desc);
+    }
+
+    /// Register handler for action
+    pub fn on<F, Fut>(&self, action_id: &str, handler: F)
+        where
+            F: Fn(ActionPayload) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = CyreResponse> + Send + 'static
+    {
+        let async_handler: AsyncHandler = Arc::new(move |payload| { Box::pin(handler(payload)) });
+
+        self.handlers.insert(action_id.to_string(), async_handler);
+        println!("✅ Handler registered: {}", action_id);
+    }
+
+    /// Call action with complete pipeline execution
+    pub async fn call<P>(&self, action_id: &str, payload: P) -> CyreResponse
+        where P: IntoActionPayload
+    {
+        let payload = payload.into_payload();
+        let execution_start = current_timestamp();
+
+        // Increment total executions
+        self.total_executions.fetch_add(1, Ordering::Relaxed);
+
+        // 1. Get configuration and validate action exists
+        let config = match self.configurations.get(action_id) {
+            Some(config) => config.clone(),
+            None => {
+                return CyreResponse::error(
+                    format!("Action '{}' not found", action_id),
+                    "Action not registered"
+                );
+            }
+        };
+
+        // 2. Get or compile pipeline
+        let pipeline = self.pipeline_cache.get_or_compile(action_id, &config);
+
+        // 3. Execute pipeline based on execution path
+        let pipeline_result = match pipeline.execution_path {
+            ExecutionPath::FastPath => {
+                // Zero-cost fast path - skip pipeline entirely
+                self.fast_path_hits.fetch_add(1, Ordering::Relaxed);
+                PipelineResult::Continue(payload)
+            }
+
+            ExecutionPath::Blocked => {
+                // Permanently blocked - don't even try
+                PipelineResult::Block("Action is blocked".to_string())
+            }
+
+            _ => {
+                // Execute compiled pipeline
+                self.pipeline_hits.fetch_add(1, Ordering::Relaxed);
+                PipelineExecutor::execute(&pipeline, payload).await
+            }
+        };
+
+        // 4. Handle pipeline result and execute handler
+        let response = match pipeline_result {
+            PipelineResult::Continue(processed_payload) => {
+                // Pipeline passed - execute handler
+                self.execute_handler(action_id, processed_payload).await
+            }
+
+            PipelineResult::Block(reason) => {
+                // Pipeline blocked execution - categorize the block type
+                self.categorize_and_count_block(&reason);
+
+                CyreResponse::error(
+                    reason.clone(),
+                    format!("Call to '{}' was blocked", action_id)
+                ).with_metadata(
+                    json!({
+                    "action_id": action_id,
+                    "block_reason": reason,
+                    "execution_path": format!("{}", pipeline.execution_path),
+                    "timestamp": current_timestamp()
+                })
+                )
+            }
+
+            PipelineResult::Error(error) => {
+                // Pipeline error
+                CyreResponse::error(
+                    error.clone(),
+                    format!("Pipeline error for '{}'", action_id)
+                ).with_metadata(
+                    json!({
+                    "action_id": action_id,
+                    "pipeline_error": error,
+                    "execution_path": format!("{}", pipeline.execution_path)
+                })
+                )
+            }
+        };
+
+        // 5. Update execution timing
+        let execution_time = current_timestamp() - execution_start;
+
+        // 6. Add execution metadata to response if enabled
+        if self.metrics_enabled.load(Ordering::Relaxed) {
+            let mut response_with_metrics = response;
+            if response_with_metrics.metadata.is_none() {
+                response_with_metrics.metadata = Some(json!({}));
+            }
+
+            if let Some(ref mut metadata) = response_with_metrics.metadata {
+                if let Some(obj) = metadata.as_object_mut() {
+                    obj.insert("execution_time_ms".to_string(), json!(execution_time));
+                    obj.insert(
+                        "execution_path".to_string(),
+                        json!(format!("{}", pipeline.execution_path))
+                    );
+                    obj.insert("pipeline_operators".to_string(), json!(pipeline.operators.len()));
+                }
+            }
+
+            return response_with_metrics;
+        }
+
+        response
+    }
+
+    /// Execute handler after successful pipeline processing
+    async fn execute_handler(&self, action_id: &str, payload: ActionPayload) -> CyreResponse {
+        match self.handlers.get(action_id) {
+            Some(handler) => {
+                // Execute the actual handler
+                handler(payload).await
+            }
+            None => {
+                CyreResponse::error(
+                    format!("Handler for '{}' not found", action_id),
+                    "Handler not registered"
+                )
+            }
+        }
+    }
+
+    /// Categorize block reasons and update appropriate counters
+    fn categorize_and_count_block(&self, reason: &str) {
+        if
+            reason.contains("Throttled") ||
+            reason.contains("Debounced") ||
+            reason.contains("change")
+        {
+            self.protection_blocks.fetch_add(1, Ordering::Relaxed);
+        } else if reason.contains("Authentication") || reason.contains("auth") {
+            self.authentication_blocks.fetch_add(1, Ordering::Relaxed);
+        } else if
+            reason.contains("Required") ||
+            reason.contains("validation") ||
+            reason.contains("schema")
+        {
+            self.validation_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    //=========================================================================
+    // CONVENIENCE METHODS - FIXED: Remove generic parameters
+    //=========================================================================
+
+    /// Register action and handler in one call
+    pub fn register<F, Fut>(&self, config: IO, handler: F)
+        where
+            F: Fn(ActionPayload) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = CyreResponse> + Send + 'static
+    {
+        let action_id = config.id.clone();
+        self.action(config);
+        self.on(&action_id, handler);
+    }
+
+    /// Quick registration for simple actions
+    pub fn simple<F, Fut>(&self, action_id: &str, handler: F)
+        where
+            F: Fn(ActionPayload) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = CyreResponse> + Send + 'static
+    {
+        self.register(IO::new(action_id), handler);
+    }
+
+    /// Register API endpoint with standard protection
+    pub fn api<F, Fut>(&self, action_id: &str, throttle_ms: u64, handler: F)
+        where
+            F: Fn(ActionPayload) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = CyreResponse> + Send + 'static
+    {
+        self.register(IO::api(action_id, throttle_ms), handler);
+    }
+
+    /// Register search endpoint with debouncing
+    pub fn search<F, Fut>(&self, action_id: &str, debounce_ms: u64, handler: F)
+        where
+            F: Fn(ActionPayload) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = CyreResponse> + Send + 'static
+    {
+        self.register(IO::search(action_id, debounce_ms), handler);
+    }
+
+    //=========================================================================
+    // SYSTEM MANAGEMENT
+    //=========================================================================
+
+    /// Initialize TimeKeeper integration (placeholder for future implementation)
+    pub async fn init_timekeeper(&self) -> CyreResult<()> {
+        // For now, just return Ok - actual TimeKeeper integration can be added later
+        println!("✅ TimeKeeper integration placeholder");
         Ok(())
     }
 
-    /// Enhanced call method - FIXED for Send compatibility
-    #[inline(always)]
-    pub async fn call(&self, id: &str, payload: ActionPayload) -> CyreResponse {
-        // ✅ Check for scheduling BEFORE acquiring any locks
-        let has_scheduling = {
-            let configs = self.configurations.read().unwrap();
-            configs.get(id).map(|config| config.has_scheduling()).unwrap_or(false)
-        };
-
-        // Route to TimeKeeper if scheduling is needed
-        if has_scheduling && self.timekeeper_enabled.load(Ordering::Relaxed) {
-            return self.call_with_scheduling(id, payload).await;
-        }
-
-        // ✅ Use scope to ensure locks are dropped before await
-        let channel_result = {
-            // Try fast path first
-            if let Some(channel) = self.fast_path_channels.read().unwrap().get(id) {
-                if likely(channel.is_fast_path()) {
-                    self.fast_path_hits.fetch_add(1, Ordering::Relaxed);
-                    self.total_executions.fetch_add(1, Ordering::Relaxed);
-                    return channel.execute_fast_path(payload).await;
-                }
-            }
-
-            // Get channel for protected execution
-            self.channels.read().unwrap().get(id).cloned()
-        };
-
-        // ✅ Execute outside of lock scope
-        if let Some(channel) = channel_result {
-            if let Some(result) = channel.execute_with_protection(payload).await {
-                self.total_executions.fetch_add(1, Ordering::Relaxed);
-                return result;
-            } else {
-                self.protection_blocks.fetch_add(1, Ordering::Relaxed);
-                return CyreResponse {
-                    ok: false,
-                    payload: serde_json::Value::Null,
-                    message: "Call blocked by protection".to_string(),
-                    error: Some("Protected".to_string()),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                };
-            }
-        }
-
-        // Channel not found
-        CyreResponse {
-            ok: false,
-            payload: serde_json::Value::Null,
-            message: "Channel not found".to_string(),
-            error: Some("Not found".to_string()),
-            timestamp: current_timestamp(),
-            metadata: None,
-        }
+    /// Enable/disable debug mode
+    pub fn set_debug_mode(&self, enabled: bool) {
+        self.debug_mode.store(enabled, Ordering::Relaxed);
+        println!("🐛 Debug mode: {}", if enabled { "enabled" } else { "disabled" });
     }
 
-    /// Call with TimeKeeper scheduling (COMPLETE implementation)
-    async fn call_with_scheduling(&self, id: &str, payload: ActionPayload) -> CyreResponse {
-        // Get the IO configuration for scheduling details
-        let config = {
-            let configs = self.configurations.read().unwrap();
-            configs.get(id).cloned()
+    /// Enable/disable metrics collection
+    pub fn set_metrics_enabled(&self, enabled: bool) {
+        self.metrics_enabled.store(enabled, Ordering::Relaxed);
+        println!("📊 Metrics collection: {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    //=========================================================================
+    // METRICS AND MONITORING
+    //=========================================================================
+
+    /// Get comprehensive performance metrics
+    pub fn get_performance_metrics(&self) -> serde_json::Value {
+        let total = self.total_executions.load(Ordering::Relaxed);
+        let fast_path = self.fast_path_hits.load(Ordering::Relaxed);
+        let pipeline = self.pipeline_hits.load(Ordering::Relaxed);
+        let protection_blocks = self.protection_blocks.load(Ordering::Relaxed);
+        let auth_blocks = self.authentication_blocks.load(Ordering::Relaxed);
+        let validation_blocks = self.validation_blocks.load(Ordering::Relaxed);
+
+        let fast_path_ratio = if total > 0 {
+            ((fast_path as f64) / (total as f64)) * 100.0
+        } else {
+            0.0
         };
 
-        let Some(config) = config else {
-            return CyreResponse {
-                ok: false,
-                payload: serde_json::Value::Null,
-                message: "Action configuration not found".to_string(),
-                error: Some("config_not_found".to_string()),
-                timestamp: current_timestamp(),
-                metadata: None,
-            };
-        };
+        let pipeline_stats = self.pipeline_cache.stats();
 
-        // Extract scheduling parameters
-        let interval = config.get_interval_ms();
-        let repeat = config.to_timer_repeat();
-        let delay = config.get_delay_ms();
-
-        // ✅ Store payload in centralized payload store
-        let payload_id = format!("payload_{}_{}", id, current_timestamp());
-        {
-            let payload_store = crate::context::payload_state::payloadState;
-            payload_store.set(&payload_id, payload.clone());
-        }
-
-        // Build the formation with payload reference
-        let mut builder = FormationBuilder::new(id, json!({ "payload_id": payload_id }))
-            .interval(interval.max(1))
-            .repeat(repeat)
-            .priority(config.priority);
-
-        if let Some(delay_ms) = delay {
-            builder = builder.delay(delay_ms);
-        }
-
-        // ✅ Schedule through centralized TimeKeeper
-        match builder.schedule().await {
-            Ok(formation_id) => {
-                self.timekeeper_executions.fetch_add(1, Ordering::Relaxed);
-                
-                CyreResponse {
-                    ok: true,
-                    payload: serde_json::json!({
-                        "scheduled": true,
-                        "formation_id": formation_id,
-                        "action_id": id,
-                        "interval": interval,
-                        "repeat": match repeat {
-                            TimerRepeat::Once => "once",
-                            TimerRepeat::Forever => "forever", 
-                            TimerRepeat::Count(n) => format!("{}_times", n)
-                        },
-                        "delay": delay,
-                        "payload_id": payload_id,
-                        "timekeeper": "centralized"
-                    }),
-                    message: "Scheduled via centralized TimeKeeper".to_string(),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: Some(serde_json::json!({
-                        "timekeeper": true,
-                        "formation_id": formation_id,
-                        "centralized_state": true
-                    })),
-                }
+        json!({
+            "system": {
+                "uptime_ms": current_timestamp() - self.start_time,
+                "debug_mode": self.debug_mode.load(Ordering::Relaxed),
+                "metrics_enabled": self.metrics_enabled.load(Ordering::Relaxed),
+                "total_actions": self.configurations.len(),
+                "total_handlers": self.handlers.len(),
             },
-            Err(error) => {
-                CyreResponse {
-                    ok: false,
-                    payload: serde_json::Value::Null,
-                    message: format!("TimeKeeper scheduling failed: {}", error),
-                    error: Some("scheduling_failed".to_string()),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                }
-            }
-        }
-    }
-
-    /// Execute action (called by TimeKeeper)
-    pub async fn execute_action(&self, id: &str, payload: ActionPayload) -> CyreResponse {
-        // ✅ Special method for TimeKeeper to call actions directly
-        self.call_immediate(id, payload).await
-    }
-
-    /// Immediate execution (bypasses scheduling check)
-    async fn call_immediate(&self, id: &str, payload: ActionPayload) -> CyreResponse {
-        // ✅ Same logic as call() but without scheduling check
-        let channel_result = {
-            if let Some(channel) = self.fast_path_channels.read().unwrap().get(id) {
-                if likely(channel.is_fast_path()) {
-                    self.fast_path_hits.fetch_add(1, Ordering::Relaxed);
-                    self.total_executions.fetch_add(1, Ordering::Relaxed);
-                    return channel.execute_fast_path(payload).await;
-                }
-            }
-            self.channels.read().unwrap().get(id).cloned()
-        };
-
-        if let Some(channel) = channel_result {
-            if let Some(result) = channel.execute_with_protection(payload).await {
-                self.total_executions.fetch_add(1, Ordering::Relaxed);
-                return result;
-            } else {
-                self.protection_blocks.fetch_add(1, Ordering::Relaxed);
-                return CyreResponse {
-                    ok: false,
-                    payload: serde_json::Value::Null,
-                    message: "Call blocked by protection".to_string(),
-                    error: Some("Protected".to_string()),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                };
-            }
-        }
-
-        CyreResponse {
-            ok: false,
-            payload: serde_json::Value::Null,
-            message: "Channel not found".to_string(),
-            error: Some("Not found".to_string()),
-            timestamp: current_timestamp(),
-            metadata: None,
-        }
-    }
-
-    /// Register an action configuration (Enhanced with TimeKeeper awareness)
-    pub fn action(&mut self, config: IO) -> CyreResponse {
-        let id = config.id.clone();
-        let has_scheduling = config.has_scheduling();
-        
-        // ✅ Store in centralized io store
-        {
-            let mut configs = self.configurations.write().unwrap();
-            configs.insert(id.clone(), config.clone());
-        }
-
-        // Create compiled pipeline for optimization
-        let pipeline = CompiledPipeline {
-            action_id: id.clone(),
-            has_protection: config.has_protection(),
-            has_talents: config.has_advanced_features(),
-            has_middleware: !config.middleware.is_empty(),
-            fast_path_eligible: config.is_fast_path_eligible() && !has_scheduling,
-            compiled_at: current_timestamp(),
-        };
-
-        {
-            let mut cache = self.pipeline_cache.write().unwrap();
-            cache.insert(id.clone(), pipeline);
-        }
-
-        CyreResponse {
-            ok: true,
-            payload: serde_json::json!({
-                "channel_id": id,
-                "fast_path_eligible": config.is_fast_path_eligible() && !has_scheduling,
-                "has_protection": config.has_protection(),
-                "has_scheduling": has_scheduling,
-                "timekeeper_managed": has_scheduling,
-                "centralized_state": true
-            }),
-            message: if has_scheduling {
-                "Action registered with TimeKeeper scheduling".to_string()
-            } else {
-                "Action registered with pipeline optimization".to_string()
+            "executions": {
+                "total_executions": total,
+                "fast_path_hits": fast_path,
+                "pipeline_hits": pipeline,
+                "fast_path_ratio": fast_path_ratio,
             },
-            error: None,
-            timestamp: current_timestamp(),
-            metadata: Some(serde_json::json!({
-                "timekeeper_enabled": has_scheduling
-            })),
-        }
+            "blocks": {
+                "total_blocks": protection_blocks + auth_blocks + validation_blocks,
+                "protection_blocks": protection_blocks,
+                "authentication_blocks": auth_blocks,
+                "validation_blocks": validation_blocks,
+            },
+            "pipeline_cache": {
+                "total_pipelines": pipeline_stats.total_pipelines,
+                "cache_hits": pipeline_stats.cache_hits,
+                "cache_misses": pipeline_stats.cache_misses,
+                "cache_hit_ratio": pipeline_stats.cache_hit_ratio(),
+                "efficiency_score": pipeline_stats.efficiency_score(),
+                "fast_path_count": pipeline_stats.fast_path_count,
+                "protected_count": pipeline_stats.protected_count,
+                "transformed_count": pipeline_stats.transformed_count,
+                "authenticated_count": pipeline_stats.authenticated_count,
+                "complex_count": pipeline_stats.complex_count,
+                "scheduled_count": pipeline_stats.scheduled_count,
+                "blocked_count": pipeline_stats.blocked_count,
+            },
+            "performance": {
+                "average_execution_efficiency": fast_path_ratio,
+                "pipeline_optimization_ratio": if pipeline_stats.total_pipelines > 0 {
+                    pipeline_stats.fast_path_count as f64 / pipeline_stats.total_pipelines as f64 * 100.0
+                } else { 0.0 },
+            },
+            // Add missing active_channels field
+            "active_channels": self.channels.len(),
+        })
     }
 
-    /// Register a handler (Enhanced for TimeKeeper integration)
-    pub fn on<F>(&mut self, id: &str, handler: F) -> CyreResponse 
-    where
-        F: Fn(ActionPayload) -> std::pin::Pin<Box<dyn std::future::Future<Output = CyreResponse> + Send>> + Send + Sync + 'static,
-    {
-        let handler: AsyncHandler = Arc::new(handler);
-        
-        // ✅ Store handler in centralized subscriber store equivalent
-        {
-            let mut handlers = self.handlers.write().unwrap();
-            handlers.insert(id.to_string(), handler.clone());
-        }
+    /// Get detailed information about a specific action
+    pub fn get_action_info(&self, action_id: &str) -> Option<serde_json::Value> {
+        let config = self.configurations.get(action_id)?;
+        let pipeline = self.pipeline_cache.get_pipeline(action_id)?;
+        let metrics = pipeline.get_metrics();
 
-        // Create channel for immediate execution
-        let config = {
-            let configs = self.configurations.read().unwrap();
-            configs.get(id).cloned().unwrap_or_else(|| IO::new(id))
-        };
-        
-        let channel = Channel::new(id.to_string(), handler, config.clone());
-        let channel_arc = Arc::new(channel);
-
-        // Store in appropriate channel cache
-        {
-            let mut channels = self.channels.write().unwrap();
-            channels.insert(id.to_string(), channel_arc.clone());
-        }
-
-        if config.is_fast_path_eligible() {
-            let mut fast_channels = self.fast_path_channels.write().unwrap();
-            fast_channels.insert(id.to_string(), channel_arc);
-        }
-        
-        CyreResponse {
-            ok: true,
-            payload: serde_json::json!({
-                "subscriber_id": id,
-                "registered": true,
-                "timekeeper_compatible": true,
-                "centralized_state": true
-            }),
-            message: "Handler registered with TimeKeeper compatibility".to_string(),
-            error: None,
-            timestamp: current_timestamp(),
-            metadata: None,
-        }
-    }
-
-    /// Cancel scheduled execution
-    pub async fn cancel_scheduled(&self, formation_id: &str) -> CyreResponse {
-        if !self.timekeeper_enabled.load(Ordering::Relaxed) {
-            return CyreResponse {
-                ok: false,
-                payload: serde_json::Value::Null,
-                message: "TimeKeeper not enabled".to_string(),
-                error: Some("timekeeper_disabled".to_string()),
-                timestamp: current_timestamp(),
-                metadata: None,
-            };
-        }
-
-        match crate::timekeeper::clear_timer(formation_id).await {
-            Ok(()) => CyreResponse {
-                ok: true,
-                payload: serde_json::json!({
-                    "cancelled": true,
-                    "formation_id": formation_id,
-                    "centralized_state": true
-                }),
-                message: "Scheduled execution cancelled via TimeKeeper".to_string(),
-                error: None,
-                timestamp: current_timestamp(),
-                metadata: Some(serde_json::json!({
-                    "timekeeper": true,
-                    "operation": "cancel"
+        Some(
+            json!({
+            "action_id": action_id,
+            "registration": {
+                "name": config.name,
+                "type": config.channel_type,
+                "path": config.path,
+                "group": config.group,
+                "tags": config.tags,
+                "description": config.description,
+                "version": config.version,
+            },
+            "configuration": {
+                "required": config.required,
+                "throttle": config.throttle,
+                "debounce": config.debounce,
+                "max_wait": config.max_wait,
+                "detect_changes": config.detect_changes,
+                "block": config.block,
+                "log": config.log,
+                "priority": format!("{:?}", config.priority),
+                "middleware": config.middleware,
+                "talents": {
+                    "condition": config.condition,
+                    "selector": config.selector,
+                    "transform": config.transform,
+                    "all_talents": config.get_all_talents(),
+                },
+                "auth": config.auth.as_ref().map(|auth| json!({
+                    "mode": format!("{:?}", auth.mode),
+                    "required": config.requires_auth(),
                 })),
             },
-            Err(error) => CyreResponse {
-                ok: false,
-                payload: serde_json::Value::Null,
-                message: format!("Failed to cancel: {}", error),
-                error: Some("cancel_failed".to_string()),
-                timestamp: current_timestamp(),
-                metadata: None,
-            }
-        }
-    }
-
-    /// Enhanced metrics including TimeKeeper stats
-    pub fn get_performance_metrics(&self) -> serde_json::Value {
-        let total_calls = self.total_executions.load(Ordering::Relaxed);
-        let fast_path_hits = self.fast_path_hits.load(Ordering::Relaxed);
-        let protection_blocks = self.protection_blocks.load(Ordering::Relaxed);
-        let timekeeper_execs = self.timekeeper_executions.load(Ordering::Relaxed);
-        
-        serde_json::json!({
-            "total_executions": total_calls,
-            "fast_path_hits": fast_path_hits,
-            "protection_blocks": protection_blocks,
-            "timekeeper_executions": timekeeper_execs,
-            "fast_path_ratio": if total_calls > 0 { 
-                (fast_path_hits as f64 / total_calls as f64) * 100.0 
-            } else { 0.0 },
-            "active_channels": self.channels.read().unwrap().len(),
-            "fast_path_channels": self.fast_path_channels.read().unwrap().len(),
-            "timekeeper_enabled": self.timekeeper_enabled.load(Ordering::Relaxed),
-            "centralized_state": true,
-            "uptime_ms": current_timestamp() - self.start_time,
+            "pipeline": {
+                "execution_path": format!("{}", metrics.execution_path),
+                "optimization_level": format!("{}", metrics.optimization_level),
+                "operator_count": metrics.operator_count,
+                "complexity_score": metrics.complexity_score,
+                "is_fast_path": pipeline.is_fast_path(),
+                "is_blocked": pipeline.is_blocked(),
+                "compiled_at": metrics.compiled_at,
+                "description": pipeline.description(),
+            },
+            "runtime_stats": {
+                "execution_count": config._execution_count,
+                "last_execution_time": config._last_exec_time,
+                "last_execution_duration": config._execution_time,
+                "has_handler": self.handlers.contains_key(action_id),
+            },
+            "optimization_flags": {
+                "_has_fast_path": config._has_fast_path,
+                "_has_protections": config._has_protections,
+                "_has_processing": config._has_processing,
+                "_has_scheduling": config._has_scheduling,
+                "_has_change_detection": config._has_change_detection,
+                "_is_blocked": config._is_blocked,
+                "_is_scheduled": config._is_scheduled,
+            },
+            "summary": config.summary(),
         })
+        )
     }
 
-    /// Get handler for action (for TimeKeeper access)
-    pub fn get_handler(&self, id: &str) -> Option<AsyncHandler> {
-        let handlers = self.handlers.read().unwrap();
-        handlers.get(id).cloned()
+    /// List all registered actions with basic info
+    pub fn list_actions(&self) -> Vec<serde_json::Value> {
+        self.configurations
+            .iter()
+            .map(|entry| {
+                let (action_id, config) = (entry.key(), entry.value());
+                let pipeline = self.pipeline_cache.get_pipeline(action_id);
+
+                json!({
+                    "id": action_id,
+                    "name": config.name,
+                    "path": config.path,
+                    "group": config.group,
+                    "execution_path": pipeline.as_ref().map(|p| format!("{}", p.execution_path)),
+                    "complexity_score": config.complexity_score(),
+                    "execution_count": config._execution_count,
+                    "has_handler": self.handlers.contains_key(action_id),
+                })
+            })
+            .collect()
     }
 
-    // ... (other existing methods remain the same)
-    
-    pub fn forget(&mut self, id: &str) -> bool {
-        println!("🗑️ Action forgotten: {}", id);
-        true
-    }
-    
-    pub fn channel_count(&self) -> usize {
-        self.channels.read().unwrap().len()
-    }
-    
-    pub fn has_channel(&self, id: &str) -> bool {
-        self.channels.read().unwrap().contains_key(id)
-    }
-}
-
-//=============================================================================
-// ENHANCED IO IMPLEMENTATION (TimeKeeper integration)
-//=============================================================================
-
-impl IO {
-    /// Check if this IO has scheduling properties
-    pub fn has_scheduling(&self) -> bool {
-        self.interval.is_some() || 
-        self.repeat.is_some() || 
-        self.delay.is_some()
+    /// Get actions by group
+    pub fn get_actions_by_group(&self, group: &str) -> Vec<String> {
+        self.configurations
+            .iter()
+            .filter_map(|entry| {
+                let (action_id, config) = (entry.key(), entry.value());
+                if config.group.as_deref() == Some(group) {
+                    Some(action_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
-    /// Convert to TimerRepeat for TimeKeeper
-    pub fn to_timer_repeat(&self) -> TimerRepeat {
-        match self.repeat {
-            Some(-1) => TimerRepeat::Forever,
-            Some(1) | None => TimerRepeat::Once,
-            Some(n) if n > 1 => TimerRepeat::Count(n as u64),
-            _ => TimerRepeat::Once,
+    /// Get actions by path prefix
+    pub fn get_actions_by_path(&self, path_prefix: &str) -> Vec<String> {
+        self.configurations
+            .iter()
+            .filter_map(|entry| {
+                let (action_id, config) = (entry.key(), entry.value());
+                if config.path.as_deref().map_or(false, |p| p.starts_with(path_prefix)) {
+                    Some(action_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    //=========================================================================
+    // PIPELINE MANAGEMENT
+    //=========================================================================
+
+    /// Clear pipeline cache (useful for hot reloading during development)
+    pub fn clear_pipeline_cache(&self) {
+        self.pipeline_cache.clear();
+        println!("🔄 Pipeline cache cleared");
+    }
+
+    /// Recompile pipeline for specific action
+    pub fn recompile_pipeline(&self, action_id: &str) -> CyreResult<()> {
+        if let Some(config) = self.configurations.get(action_id) {
+            // Remove from cache to force recompilation
+            self.pipeline_cache.remove_pipeline(action_id);
+
+            // Trigger recompilation
+            let pipeline = self.pipeline_cache.get_or_compile(action_id, &config);
+
+            println!("🔄 Pipeline recompiled for '{}': {}", action_id, pipeline.description());
+            Ok(())
+        } else {
+            Err(CyreError::ActionNotFound { action_id: action_id.to_string() })
         }
     }
 
-    /// Get interval with default
-    pub fn get_interval_ms(&self) -> u64 {
-        self.interval.unwrap_or(0)
-    }
+    /// Update action configuration and recompile pipeline
+    pub fn update_action(&self, action_id: &str, new_config: IO) -> CyreResult<()> {
+        if !self.configurations.contains_key(action_id) {
+            return Err(CyreError::ActionNotFound { action_id: action_id.to_string() });
+        }
 
-    /// Get delay
-    pub fn get_delay_ms(&self) -> Option<u64> {
-        self.delay
-    }
+        // Ensure the ID matches
+        if new_config.id != action_id {
+            return Err(CyreError::ConfigurationError {
+                field: "id".to_string(),
+                reason: "ID cannot be changed when updating configuration".to_string(),
+            });
+        }
 
-    /// Builder for setTimeout equivalent
-    pub fn timeout(mut self, delay_ms: u64) -> Self {
-        self.delay = Some(delay_ms);
-        self.repeat = Some(1);
-        self.fast_path_eligible = false; // Scheduling disables fast path
-        self
-    }
+        // Update configuration
+        self.configurations.insert(action_id.to_string(), new_config.clone());
 
-    /// Builder for setInterval equivalent
-    pub fn interval(mut self, interval_ms: u64) -> Self {
-        self.interval = Some(interval_ms);
-        self.repeat = Some(-1); // Forever
-        self.fast_path_eligible = false;
-        self
-    }
+        // Force pipeline recompilation
+        self.recompile_pipeline(action_id)?;
 
-    /// Builder for finite repetition
-    pub fn repeat_times(mut self, interval_ms: u64, count: u32) -> Self {
-        self.interval = Some(interval_ms);
-        self.repeat = Some(count as i32);
-        self.fast_path_eligible = false;
-        self
-    }
-}
-
-//=============================================================================
-// TIMEKEEPER INTEGRATION TRAIT
-//=============================================================================
-
-pub trait TimeKeeperIntegration {
-    fn init_timekeeper(&mut self) -> Result<(), String>;
-    fn schedule_action(&self, action_id: &str, payload: ActionPayload, interval: u64, repeat: TimerRepeat) -> Result<String, String>;
-    fn cancel_scheduled(&self, formation_id: &str) -> Result<(), String>;
-    fn execute_action_for_timekeeper(&self, action_id: &str, payload: ActionPayload) -> std::pin::Pin<Box<dyn std::future::Future<Output = CyreResponse> + Send>>;
-}
-
-impl TimeKeeperIntegration for Cyre {
-    fn init_timekeeper(&mut self) -> Result<(), String> {
-        // Async version is the main one, this is a sync wrapper
-        self.timekeeper_enabled.store(true, Ordering::Relaxed);
+        println!("✅ Action '{}' configuration updated", action_id);
         Ok(())
     }
 
-    fn schedule_action(&self, action_id: &str, payload: ActionPayload, interval: u64, repeat: TimerRepeat) -> Result<String, String> {
-        // This would need to be made async or use blocking
-        Err("Use async version".to_string())
+    //=========================================================================
+    // DEBUGGING AND DIAGNOSTICS
+    //=========================================================================
+
+    /// Print detailed system status
+    pub fn print_system_status(&self) {
+        let metrics = self.get_performance_metrics();
+
+        println!("\n🔍 CYRE SYSTEM STATUS");
+        println!("========================");
+
+        // System info
+        let system = &metrics["system"];
+        println!("🖥️  System:");
+        println!("   Uptime: {}ms", system["uptime_ms"]);
+        println!("   Actions: {}", system["total_actions"]);
+        println!("   Handlers: {}", system["total_handlers"]);
+        println!("   Debug Mode: {}", system["debug_mode"]);
+
+        // Execution stats
+        let executions = &metrics["executions"];
+        println!("\n⚡ Executions:");
+        println!("   Total: {}", executions["total_executions"]);
+        println!(
+            "   Fast Path: {} ({:.1}%)",
+            executions["fast_path_hits"],
+            executions["fast_path_ratio"]
+        );
+        println!("   Pipeline: {}", executions["pipeline_hits"]);
+
+        // Block stats
+        let blocks = &metrics["blocks"];
+        println!("\n🛡️  Blocks:");
+        println!("   Total: {}", blocks["total_blocks"]);
+        println!("   Protection: {}", blocks["protection_blocks"]);
+        println!("   Authentication: {}", blocks["authentication_blocks"]);
+        println!("   Validation: {}", blocks["validation_blocks"]);
+
+        // Pipeline cache stats
+        let cache = &metrics["pipeline_cache"];
+        println!("\n🏗️  Pipeline Cache:");
+        println!("   Total Pipelines: {}", cache["total_pipelines"]);
+        println!(
+            "   Cache Hit Ratio: {:.1}%",
+            cache["cache_hit_ratio"].as_f64().unwrap_or(0.0) * 100.0
+        );
+        println!("   Fast Path: {}", cache["fast_path_count"]);
+        println!("   Protected: {}", cache["protected_count"]);
+        println!("   Complex: {}", cache["complex_count"]);
+
+        // Performance summary
+        let performance = &metrics["performance"];
+        println!("\n📈 Performance:");
+        println!("   Execution Efficiency: {:.1}%", performance["average_execution_efficiency"]);
+        println!("   Optimization Ratio: {:.1}%", performance["pipeline_optimization_ratio"]);
+
+        println!();
     }
 
-    fn cancel_scheduled(&self, formation_id: &str) -> Result<(), String> {
-        // This would need to be made async or use blocking
-        Err("Use async version".to_string())
-    }
+    /// Health check for the entire system
+    pub fn health_check(&self) -> serde_json::Value {
+        let metrics = self.get_performance_metrics();
+        let total_actions = metrics["system"]["total_actions"].as_u64().unwrap_or(0);
+        let total_handlers = metrics["system"]["total_handlers"].as_u64().unwrap_or(0);
+        let cache_hit_ratio = metrics["pipeline_cache"]["cache_hit_ratio"].as_f64().unwrap_or(0.0);
 
-    fn execute_action_for_timekeeper(&self, action_id: &str, payload: ActionPayload) -> std::pin::Pin<Box<dyn std::future::Future<Output = CyreResponse> + Send>> {
-        // ✅ This is the key integration point for TimeKeeper
-        let self_clone = unsafe { std::ptr::read(self) }; // This is unsafe, better to use Arc
-        Box::pin(async move {
-            self_clone.execute_action(action_id, payload).await
+        let status = if total_actions == total_handlers && cache_hit_ratio > 0.8 {
+            "healthy"
+        } else if total_actions > 0 && total_handlers > 0 {
+            "degraded"
+        } else {
+            "unhealthy"
+        };
+
+        json!({
+            "status": status,
+            "timestamp": current_timestamp(),
+            "checks": {
+                "actions_registered": total_actions > 0,
+                "handlers_registered": total_handlers > 0,
+                "actions_handlers_match": total_actions == total_handlers,
+                "cache_performance_good": cache_hit_ratio > 0.8,
+                "system_responsive": true, // Always true if we can run this check
+            },
+            "metrics_summary": {
+                "total_actions": total_actions,
+                "total_handlers": total_handlers,
+                "cache_hit_ratio": cache_hit_ratio,
+                "uptime_ms": metrics["system"]["uptime_ms"],
+            }
         })
+    }
+
+    //=========================================================================
+    // UTILITY METHODS
+    //=========================================================================
+
+    /// Check if action exists
+    pub fn has_action(&self, action_id: &str) -> bool {
+        self.configurations.contains_key(action_id)
+    }
+
+    /// Check if handler is registered
+    pub fn has_handler(&self, action_id: &str) -> bool {
+        self.handlers.contains_key(action_id)
+    }
+
+    /// Remove action and its handler
+    pub fn remove_action(&self, action_id: &str) -> CyreResult<()> {
+        let had_config = self.configurations.remove(action_id).is_some();
+        let had_handler = self.handlers.remove(action_id).is_some();
+        let had_channel = self.channels.remove(action_id).is_some();
+
+        if had_config || had_handler || had_channel {
+            // Also remove from pipeline cache
+            self.pipeline_cache.remove_pipeline(action_id);
+            println!("🗑️  Removed action: {}", action_id);
+            Ok(())
+        } else {
+            Err(CyreError::ActionNotFound { action_id: action_id.to_string() })
+        }
+    }
+
+    /// Get system uptime in milliseconds
+    pub fn uptime_ms(&self) -> u64 {
+        current_timestamp() - self.start_time
+    }
+
+    /// Get total number of registered actions
+    pub fn action_count(&self) -> usize {
+        self.configurations.len()
+    }
+
+    /// Get total number of registered handlers
+    pub fn handler_count(&self) -> usize {
+        self.handlers.len()
     }
 }
 
 //=============================================================================
-// COMPILED PIPELINE (unchanged)
+// DEFAULT IMPLEMENTATION
 //=============================================================================
 
-#[derive(Debug, Clone)]
-pub struct CompiledPipeline {
-    pub action_id: String,
-    pub has_protection: bool,
-    pub has_talents: bool,
-    pub has_middleware: bool,
-    pub fast_path_eligible: bool,
-    pub compiled_at: u64,
+impl Default for Cyre {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+//=============================================================================
+// DISPLAY IMPLEMENTATION
+//=============================================================================
+
+impl std::fmt::Display for Cyre {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Cyre[actions:{}, handlers:{}, uptime:{}ms]",
+            self.action_count(),
+            self.handler_count(),
+            self.uptime_ms()
+        )
+    }
 }

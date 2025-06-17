@@ -1,5 +1,5 @@
 // src/talent/registry.rs
-// Talent registry for managing and executing talents
+// Talent registry for managing and executing talents - FIXED TalentResult usage
 
 use std::collections::HashMap;
 use std::sync::{ Arc, RwLock, OnceLock };
@@ -68,10 +68,7 @@ impl TalentRegistry {
                 None => {
                     return TalentResult {
                         success: false,
-                        value: Value::Null,
                         payload: payload.clone(),
-                        message: "Talent not found".to_string(),
-                        execution_time: start_time.elapsed().as_millis() as u64,
                         error: Some(format!("Talent not found: {}", talent_id)),
                         metadata: Some(
                             serde_json::json!({
@@ -108,10 +105,7 @@ impl TalentRegistry {
                 None => {
                     return TalentResult {
                         success: false,
-                        value: Value::Null,
                         payload: payload.clone(),
-                        message: "Pipeline not found".to_string(),
-                        execution_time: start_time.elapsed().as_millis() as u64,
                         error: Some(format!("Pipeline '{}' not found", pipeline_id)),
                         metadata: Some(
                             serde_json::json!({
@@ -142,10 +136,7 @@ impl TalentRegistry {
                 if !errors.is_empty() {
                     return TalentResult {
                         success: false,
-                        value: current_payload.clone(),
                         payload: current_payload,
-                        message: "Pipeline execution failed".to_string(),
-                        execution_time: start_time.elapsed().as_millis() as u64,
                         error: Some(format!("Talent execution failed: {}", errors.join(", "))),
                         metadata: Some(
                             serde_json::json!({
@@ -164,10 +155,7 @@ impl TalentRegistry {
         // Update pipeline metadata
         let mut result = TalentResult {
             success: true,
-            value: current_payload.clone(),
             payload: current_payload,
-            message: "Pipeline execution completed".to_string(),
-            execution_time,
             error: None,
             metadata: Some(
                 serde_json::json!({

@@ -1,416 +1,210 @@
-// src/types/mod.rs
-// Core types for Cyre Rust with proper CyreResponse implementation
+// src/types/mod.rs - FIXED: Remove duplicate definitions
 
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::future::Future;
 use std::sync::Arc;
+use std::collections::HashMap;
 use serde::{ Serialize, Deserialize };
-use serde_json::Value;
+use serde_json::Value as JsonValue;
 
 //=============================================================================
-// CORE TYPE ALIASES
+// RE-EXPORT THE COMPLETE IO IMPLEMENTATION
 //=============================================================================
 
+mod io;
+pub use io::*; // This brings in IO, RequiredType, RepeatType, AuthConfig, AuthMode, Priority
+
+//=============================================================================
+// CORE TYPE ALIASES (Only define ONCE - no duplicates)
+//=============================================================================
+
+/// Action identifier type
 pub type ActionId = String;
-pub type ActionPayload = Value;
+
+/// Action payload type (JSON)
+pub type ActionPayload = JsonValue;
+
+/// Async handler function type
 pub type AsyncHandler = Arc<
     dyn (Fn(ActionPayload) -> Pin<Box<dyn Future<Output = CyreResponse> + Send>>) + Send + Sync
 >;
 
-// Fast hash map type for performance
-pub type FastMap<K, V> = HashMap<K, V>;
+/// Small vectors for performance optimization
+pub type SmallTags = Vec<String>;
+pub type SmallMiddleware = Vec<String>;
 
 //=============================================================================
-// CYRE RESPONSE TYPE
+// TIMER TYPE (for TimeKeeper integration)
 //=============================================================================
 
+/// Timer interface for timeline store
+#[derive(Debug, Clone)]
+pub struct Timer {
+    pub id: String,
+    pub start_time: u64,
+    pub duration: u64,
+    pub original_duration: u64,
+    pub repeat: Option<i32>, // None = once, Some(-1) = forever, Some(n) = n times
+    pub execution_count: u64,
+    pub last_execution_time: u64,
+    pub next_execution_time: u64,
+    pub is_in_recuperation: bool,
+    pub status: String,
+    pub is_active: bool,
+    pub delay: Option<u64>,
+    pub interval: Option<u64>,
+    pub has_executed_once: bool,
+    pub priority: Priority, // Use the Priority from io.rs
+    pub metrics: Option<JsonValue>,
+}
+
+impl Timer {
+    pub fn new(id: String) -> Self {
+        let now = std::time::SystemTime
+            ::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        Self {
+            id,
+            start_time: now,
+            duration: 0,
+            original_duration: 0,
+            repeat: None,
+            execution_count: 0,
+            last_execution_time: 0,
+            next_execution_time: now,
+            is_in_recuperation: false,
+            status: "active".to_string(),
+            is_active: true,
+            delay: None,
+            interval: None,
+            has_executed_once: false,
+            priority: Priority::Normal,
+            metrics: None,
+        }
+    }
+}
+
+//=============================================================================
+// RESPONSE TYPES (Only define ONCE)
+//=============================================================================
+
+/// Standard response format for all Cyre operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CyreResponse {
+    /// Whether the operation succeeded
     pub ok: bool,
-    pub payload: Value,
+
+    /// Response payload data
+    pub payload: ActionPayload,
+
+    /// Human-readable message
     pub message: String,
+
+    /// Error information if ok is false
     pub error: Option<String>,
+
+    /// Response timestamp
     pub timestamp: u64,
-    pub metadata: Option<Value>,
+
+    /// Additional metadata
+    pub metadata: Option<JsonValue>,
 }
 
 impl CyreResponse {
     /// Create a successful response
-    pub fn ok(payload: Value) -> Self {
+    pub fn success(payload: ActionPayload, message: impl Into<String>) -> Self {
         Self {
             ok: true,
             payload,
-            message: "Success".to_string(),
+            message: message.into(),
             error: None,
-            timestamp: std::time::SystemTime
-                ::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            metadata: None,
-        }
-    }
-
-    /// Create a successful response with message
-    pub fn ok_with_message(payload: Value, message: String) -> Self {
-        Self {
-            ok: true,
-            payload,
-            message,
-            error: None,
-            timestamp: std::time::SystemTime
-                ::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: crate::utils::current_timestamp(),
             metadata: None,
         }
     }
 
     /// Create an error response
-    pub fn error(message: String) -> Self {
+    pub fn error(error: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             ok: false,
-            payload: Value::Null,
-            message: "Error".to_string(),
-            error: Some(message),
-            timestamp: std::time::SystemTime
-                ::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            payload: JsonValue::Null,
+            message: message.into(),
+            error: Some(error.into()),
+            timestamp: crate::utils::current_timestamp(),
             metadata: None,
         }
     }
 
-    /// Create an error response with payload
-    pub fn error_with_payload(payload: Value, error_message: String) -> Self {
-        Self {
-            ok: false,
-            payload,
-            message: "Error".to_string(),
-            error: Some(error_message),
-            timestamp: std::time::SystemTime
-                ::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            metadata: None,
-        }
-    }
-
-    /// Add metadata to the response
-    pub fn with_metadata(mut self, metadata: Value) -> Self {
+    /// Add metadata to response
+    pub fn with_metadata(mut self, metadata: JsonValue) -> Self {
         self.metadata = Some(metadata);
         self
     }
 
-    /// Set custom message
-    pub fn with_message(mut self, message: String) -> Self {
-        self.message = message;
-        self
+    /// Legacy compatibility - redirect to success
+    pub fn ok(payload: ActionPayload) -> Self {
+        Self::success(payload, "Success")
     }
 }
 
 impl Default for CyreResponse {
     fn default() -> Self {
-        Self::ok(Value::Null)
-    }
-}
-
-//=============================================================================
-// PRIORITY ENUM
-//=============================================================================
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Priority {
-    Low = 1,
-    Normal = 2,
-    Medium = 3,
-    High = 4,
-    Critical = 5,
-}
-
-impl Default for Priority {
-    fn default() -> Self {
-        Priority::Normal
-    }
-}
-
-impl Priority {
-    pub fn as_u8(&self) -> u8 {
-        *self as u8
-    }
-
-    pub fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            1 => Some(Priority::Low),
-            2 => Some(Priority::Normal),
-            3 => Some(Priority::Medium),
-            4 => Some(Priority::High),
-            5 => Some(Priority::Critical),
-            _ => None,
-        }
-    }
-}
-
-//=============================================================================
-// IO CONFIGURATION STRUCT
-//=============================================================================
-
-#[derive(Debug, Clone)]
-pub struct IO {
-    // Core identification
-    pub id: ActionId,
-    pub name: Option<String>,
-    pub description: Option<String>,
-
-    // Performance and behavior
-    pub priority: Priority,
-    pub throttle: Option<u64>,
-    pub debounce: Option<u64>,
-    pub detect_changes: bool,
-
-    // Scheduling (for TimeKeeper integration)
-    pub delay: Option<u64>,
-    pub interval: Option<u64>,
-    pub repeat: Option<u32>,
-
-    // Resource limits
-    pub timeout: Option<u64>,
-    pub memory_limit: Option<u64>,
-
-    // Advanced features
-    pub fast_path_eligible: bool,
-    pub log: bool,
-    pub middleware: Vec<String>,
-
-    // Metadata
-    pub tags: Vec<String>,
-    pub metadata: HashMap<String, String>,
-}
-
-impl IO {
-    /// Create a new IO configuration
-    pub fn new(id: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
-            name: None,
-            description: None,
-            priority: Priority::Normal,
-            throttle: None,
-            debounce: None,
-            detect_changes: false,
-            delay: None,
-            interval: None,
-            repeat: None,
-            timeout: None,
-            memory_limit: None,
-            fast_path_eligible: true,
-            log: false,
-            middleware: Vec::new(),
-            tags: Vec::new(),
-            metadata: HashMap::new(),
-        }
-    }
-
-    /// Set human-readable name
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Set description
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Set priority
-    pub fn with_priority(mut self, priority: Priority) -> Self {
-        self.priority = priority;
-        self
-    }
-
-    /// Set throttle (minimum time between executions in ms)
-    pub fn with_throttle(mut self, throttle_ms: u64) -> Self {
-        self.throttle = Some(throttle_ms);
-        self
-    }
-
-    /// Set debounce (delay execution until no more calls for N ms)
-    pub fn with_debounce(mut self, debounce_ms: u64) -> Self {
-        self.debounce = Some(debounce_ms);
-        self
-    }
-
-    /// Enable change detection
-    pub fn with_change_detection(mut self) -> Self {
-        self.detect_changes = true;
-        self
-    }
-
-    /// Set execution delay (for TimeKeeper)
-    pub fn with_delay(mut self, delay_ms: u64) -> Self {
-        self.delay = Some(delay_ms);
-        self
-    }
-
-    /// Set execution interval (for TimeKeeper)
-    pub fn with_interval(mut self, interval_ms: u64) -> Self {
-        self.interval = Some(interval_ms);
-        self
-    }
-
-    /// Set repeat count (for TimeKeeper)
-    pub fn with_repeat(mut self, repeat_count: u32) -> Self {
-        self.repeat = Some(repeat_count);
-        self
-    }
-
-    /// Set execution timeout
-    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout = Some(timeout_ms);
-        self
-    }
-
-    /// Add tag
-    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
-        self.tags.push(tag.into());
-        self
-    }
-
-    /// Add metadata
-    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.metadata.insert(key.into(), value.into());
-        self
-    }
-
-    /// Check if this IO has fast path eligibility
-    pub fn is_fast_path_eligible(&self) -> bool {
-        self.fast_path_eligible &&
-            self.throttle.is_none() &&
-            self.debounce.is_none() &&
-            !self.detect_changes &&
-            self.delay.is_none() &&
-            self.interval.is_none()
-    }
-
-    /// Check if this IO has protection mechanisms
-    pub fn has_protection(&self) -> bool {
-        self.throttle.is_some() || self.debounce.is_some() || self.detect_changes
-    }
-
-    /// Check if this IO has advanced features
-    pub fn has_advanced_features(&self) -> bool {
-        !self.middleware.is_empty() || !self.tags.is_empty() || self.log
-    }
-
-    /// Check if this IO needs TimeKeeper
-    pub fn needs_timekeeper(&self) -> bool {
-        self.delay.is_some() || self.interval.is_some()
-    }
-
-    /// Get scheduling type for pipeline optimization
-    pub fn get_scheduling_type(&self) -> SchedulingType {
-        match (self.delay, self.interval, self.repeat) {
-            (None, None, _) => SchedulingType::Immediate,
-            (Some(_), None, _) => SchedulingType::DelayOnly,
-            (None, Some(_), None) => SchedulingType::IntervalInfinite,
-            (None, Some(_), Some(_)) => SchedulingType::IntervalFinite,
-            (Some(_), Some(_), _) => SchedulingType::ComplexFinite,
+            ok: true,
+            payload: serde_json::Value::Null,
+            message: String::new(),
+            error: None,
+            timestamp: std::time::SystemTime
+                ::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            metadata: None,
         }
     }
 }
 
 //=============================================================================
-// SCHEDULING TYPES
+// TALENT SYSTEM TYPES (FIXED - correct structure)
 //=============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SchedulingType {
-    Immediate, // No scheduling
-    DelayOnly, // setTimeout equivalent
-    IntervalInfinite, // setInterval infinite
-    IntervalFinite, // setInterval with repeat count
-    ComplexFinite, // delay + interval + repeat
-}
-
-impl SchedulingType {
-    pub fn description(&self) -> &'static str {
-        match self {
-            Self::Immediate => "immediate execution",
-            Self::DelayOnly => "delayed execution",
-            Self::IntervalInfinite => "infinite interval",
-            Self::IntervalFinite => "finite interval",
-            Self::ComplexFinite => "complex scheduling",
-        }
-    }
-}
-
-//=============================================================================
-// PIPELINE OPTIMIZATION TYPES
-//=============================================================================
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PipelinePriority {
-    FastPath, // Zero-overhead execution
-    Protected, // With throttle/debounce
-    TimeKeeper, // Scheduled execution
-}
-
-impl PipelinePriority {
-    pub fn optimization_level(&self) -> &'static str {
-        match self {
-            Self::FastPath => "zero-cost",
-            Self::Protected => "protected",
-            Self::TimeKeeper => "scheduled",
-        }
-    }
-}
-
-//=============================================================================
-// RESULT TYPES
-//=============================================================================
-
-#[derive(Debug, Clone)]
+/// Result type for talent execution - FIXED STRUCTURE
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TalentResult {
     pub success: bool,
-    pub value: Value,
-    pub payload: Value,
-    pub message: String,
-    pub execution_time: u64,
+    pub payload: ActionPayload, // Main result field
     pub error: Option<String>,
-    pub metadata: Option<Value>,
+    pub metadata: Option<JsonValue>,
 }
 
 impl TalentResult {
-    pub fn ok(payload: Value) -> Self {
+    pub fn success(payload: ActionPayload) -> Self {
         Self {
             success: true,
-            value: payload.clone(),
             payload,
-            message: "Success".to_string(),
-            execution_time: 0,
             error: None,
             metadata: None,
         }
     }
 
-    pub fn error(message: String) -> Self {
+    pub fn error(error: impl Into<String>) -> Self {
         Self {
             success: false,
-            value: Value::Null,
-            payload: Value::Null,
-            message: "Error".to_string(),
-            execution_time: 0,
-            error: Some(message),
+            payload: JsonValue::Null,
+            error: Some(error.into()),
             metadata: None,
         }
     }
+
+    pub fn with_metadata(mut self, metadata: JsonValue) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
 }
 
+/// Result type for schema validation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
     pub valid: bool,
@@ -418,69 +212,305 @@ pub struct ValidationResult {
     pub warnings: Vec<String>,
 }
 
-//=============================================================================
-// FUNCTION TYPES FOR TALENT SYSTEM
-//=============================================================================
+impl ValidationResult {
+    pub fn valid() -> Self {
+        Self {
+            valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
 
-pub type SchemaFunction = Arc<dyn (Fn(&Value) -> ValidationResult) + Send + Sync>;
-pub type ConditionFunction = Arc<dyn (Fn(&Value) -> bool) + Send + Sync>;
-pub type TransformFunction = Arc<dyn (Fn(Value) -> Value) + Send + Sync>;
-pub type SelectorFunction = Arc<dyn (Fn(&Value) -> Value) + Send + Sync>;
+    pub fn invalid(errors: Vec<String>) -> Self {
+        Self {
+            valid: false,
+            errors,
+            warnings: Vec::new(),
+        }
+    }
 
-//=============================================================================
-// UTILITY FUNCTIONS
-//=============================================================================
-
-/// Likely hint for branch prediction optimization
-#[inline(always)]
-pub fn likely(condition: bool) -> bool {
-    std::hint::black_box(condition)
-}
-
-/// Convert duration to human readable format
-pub fn format_duration(duration_ms: u64) -> String {
-    if duration_ms < 1000 {
-        format!("{}ms", duration_ms)
-    } else if duration_ms < 60_000 {
-        format!("{:.1}s", (duration_ms as f64) / 1000.0)
-    } else {
-        format!("{:.1}m", (duration_ms as f64) / 60_000.0)
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
     }
 }
 
 //=============================================================================
-// TIMER TYPE FOR TIMELINE INTEGRATION
+// FUNCTION TYPES FOR TALENTS
 //=============================================================================
 
-#[derive(Debug, Clone)]
-pub struct Timer {
-    pub id: String,
-    pub start_time: u64,
-    pub duration: u64,
-    pub callback: Option<String>, // Reference to callback (simplified)
-    pub repeat: Option<u32>,
-    pub execution_count: u32,
-    pub last_execution_time: u64,
-    pub next_execution_time: u64,
-    pub is_active: bool,
-    pub status: String,
-    pub priority: Priority,
+/// Function type for schema validation
+pub type SchemaFunction = Arc<dyn (Fn(&ActionPayload) -> ValidationResult) + Send + Sync>;
+
+/// Function type for conditional execution
+pub type ConditionFunction = Arc<dyn (Fn(&ActionPayload) -> bool) + Send + Sync>;
+
+/// Function type for data transformation
+pub type TransformFunction = Arc<dyn (Fn(ActionPayload) -> ActionPayload) + Send + Sync>;
+
+/// Function type for data selection/filtering
+pub type SelectorFunction = Arc<dyn (Fn(&ActionPayload) -> ActionPayload) + Send + Sync>;
+
+/// Generic talent function type
+pub type TalentFunction = Arc<dyn (Fn(&IO, ActionPayload) -> TalentResult) + Send + Sync>;
+
+//=============================================================================
+// ERROR TYPES (Only define ONCE)
+//=============================================================================
+
+/// Comprehensive error types for Cyre operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CyreError {
+    /// Action not found
+    ActionNotFound {
+        action_id: String,
+    },
+
+    /// Handler not registered
+    HandlerNotFound {
+        action_id: String,
+    },
+
+    /// Protection violation (throttled, blocked, etc.)
+    ProtectionViolation {
+        reason: String,
+        action_id: String,
+    },
+
+    /// Pipeline compilation error
+    PipelineError {
+        error: String,
+        action_id: String,
+    },
+
+    /// Validation error
+    ValidationError {
+        errors: Vec<String>,
+        action_id: String,
+    },
+
+    /// Authentication error
+    AuthenticationError {
+        reason: String,
+    },
+
+    /// TimeKeeper integration error
+    TimeKeeperError {
+        error: String,
+    },
+
+    /// Talent system error
+    TalentError {
+        talent_name: String,
+        error: String,
+    },
+
+    /// Configuration error
+    ConfigurationError {
+        field: String,
+        reason: String,
+    },
+
+    /// System error
+    SystemError {
+        error: String,
+    },
 }
 
-impl Timer {
-    pub fn new(id: String) -> Self {
-        Self {
-            id,
-            start_time: 0,
-            duration: 0,
-            callback: None,
-            repeat: None,
-            execution_count: 0,
-            last_execution_time: 0,
-            next_execution_time: 0,
-            is_active: false,
-            status: "inactive".to_string(),
-            priority: Priority::Normal,
+impl std::fmt::Display for CyreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CyreError::ActionNotFound { action_id } => {
+                write!(f, "Action '{}' not found", action_id)
+            }
+            CyreError::HandlerNotFound { action_id } => {
+                write!(f, "Handler for action '{}' not registered", action_id)
+            }
+            CyreError::ProtectionViolation { reason, action_id } => {
+                write!(f, "Protection violation for '{}': {}", action_id, reason)
+            }
+            CyreError::PipelineError { error, action_id } => {
+                write!(f, "Pipeline error for '{}': {}", action_id, error)
+            }
+            CyreError::ValidationError { errors, action_id } => {
+                write!(f, "Validation failed for '{}': {}", action_id, errors.join(", "))
+            }
+            CyreError::AuthenticationError { reason } => {
+                write!(f, "Authentication error: {}", reason)
+            }
+            CyreError::TimeKeeperError { error } => { write!(f, "TimeKeeper error: {}", error) }
+            CyreError::TalentError { talent_name, error } => {
+                write!(f, "Talent '{}' error: {}", talent_name, error)
+            }
+            CyreError::ConfigurationError { field, reason } => {
+                write!(f, "Configuration error in '{}': {}", field, reason)
+            }
+            CyreError::SystemError { error } => { write!(f, "System error: {}", error) }
         }
     }
 }
+
+impl std::error::Error for CyreError {}
+
+// Convert CyreError to String (fixes lib.rs error)
+impl From<CyreError> for String {
+    fn from(error: CyreError) -> Self {
+        error.to_string()
+    }
+}
+
+// Convert CyreError to CyreResponse for easy error handling
+impl From<CyreError> for CyreResponse {
+    fn from(error: CyreError) -> Self {
+        CyreResponse::error(error.to_string(), "Operation failed")
+    }
+}
+
+//=============================================================================
+// CONVENIENT TYPE RESULT ALIASES
+//=============================================================================
+
+/// Standard result type for Cyre operations
+pub type CyreResult<T> = Result<T, CyreError>;
+
+/// Result type for async operations
+pub type AsyncCyreResult<T> = Pin<Box<dyn Future<Output = CyreResult<T>> + Send>>;
+
+//=============================================================================
+// OTHER SUPPORTING TYPES
+//=============================================================================
+
+/// Timeline entry for tracking action history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineEntry {
+    pub id: String,
+    pub action_id: String,
+    pub payload: ActionPayload,
+    pub response: CyreResponse,
+    pub timestamp: u64,
+    pub execution_time_ms: u64,
+}
+
+/// Branch store entry for hierarchical organization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchStore {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub children: Vec<String>,
+    pub created_at: u64,
+}
+
+/// Pipeline execution context
+#[derive(Debug, Clone)]
+pub struct PipelineContext {
+    pub action_id: ActionId,
+    pub start_time: u64,
+    pub execution_count: u64,
+    pub metadata: HashMap<String, JsonValue>,
+}
+
+impl PipelineContext {
+    pub fn new(action_id: ActionId) -> Self {
+        Self {
+            action_id,
+            start_time: crate::utils::current_timestamp(),
+            execution_count: 0,
+            metadata: HashMap::new(),
+        }
+    }
+}
+
+/// Subscriber interface for action handlers
+#[derive(Clone)]
+pub struct ISubscriber {
+    pub id: String,
+    pub handler: AsyncHandler,
+    pub active: bool,
+    pub created_at: u64,
+}
+
+impl ISubscriber {
+    pub fn new(id: String, handler: AsyncHandler) -> Self {
+        Self {
+            id,
+            handler,
+            active: true,
+            created_at: crate::utils::current_timestamp(),
+        }
+    }
+}
+
+// Manual Debug implementation for ISubscriber (handler can't be debugged)
+impl std::fmt::Debug for ISubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ISubscriber")
+            .field("id", &self.id)
+            .field("handler", &"<async_handler>")
+            .field("active", &self.active)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+//=============================================================================
+// INTEGRATION HELPERS
+//=============================================================================
+
+/// Helper trait for converting various types to ActionPayload
+pub trait IntoActionPayload {
+    fn into_payload(self) -> ActionPayload;
+}
+
+impl IntoActionPayload for ActionPayload {
+    fn into_payload(self) -> ActionPayload {
+        self
+    }
+}
+
+impl IntoActionPayload for &str {
+    fn into_payload(self) -> ActionPayload {
+        JsonValue::String(self.to_string())
+    }
+}
+
+impl IntoActionPayload for String {
+    fn into_payload(self) -> ActionPayload {
+        JsonValue::String(self)
+    }
+}
+
+impl IntoActionPayload for i32 {
+    fn into_payload(self) -> ActionPayload {
+        JsonValue::Number(self.into())
+    }
+}
+
+impl IntoActionPayload for u64 {
+    fn into_payload(self) -> ActionPayload {
+        JsonValue::Number(self.into())
+    }
+}
+
+impl IntoActionPayload for bool {
+    fn into_payload(self) -> ActionPayload {
+        JsonValue::Bool(self)
+    }
+}
+
+//=============================================================================
+// CONSTANTS
+//=============================================================================
+
+/// Default timeout for operations (30 seconds)
+pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// Current Cyre version
+pub const CYRE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Build information - FIXED to avoid missing env var
+pub const BUILD_INFO: &str = concat!(
+    "Cyre Rust v",
+    env!("CARGO_PKG_VERSION"),
+    " - Production Build"
+);

@@ -353,10 +353,11 @@ pub fn forget(task_id: &str) -> TaskResult<bool> {
         }
     }
 
-    // Remove from store
+    // Remove from store - FIX: Bind the result to control drop order in Rust 2024
     let removed = {
         let mut store = get_task_store().write().unwrap();
-        store.remove(task_id).is_some()
+        let result = store.remove(task_id); // Explicit binding
+        result.is_some()
     };
 
     (
@@ -368,7 +369,6 @@ pub fn forget(task_id: &str) -> TaskResult<bool> {
         }
     ).with_execution_time(start.elapsed())
 }
-
 /// Activate/deactivate task with timeline integration
 pub async fn activate(task_id: &str, active: bool) -> TaskResult<String> {
     let start = Instant::now();

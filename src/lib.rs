@@ -17,7 +17,9 @@ pub mod timeline; // Timeline and scheduling (legacy)
 pub mod branch; // Branch system
 pub mod channel; // Channel implementation
 pub mod core; // Main Cyre implementation
+pub mod pipeline; // Pipeline system for enhanced Cyre
 pub mod context; // Context and state management with task store
+pub mod orchestration; // Orchestration system
 pub mod utils; // Utility functions
 
 //=============================================================================
@@ -86,6 +88,31 @@ pub use context::{
     TimelineStore,
 };
 
+// Orchestration system
+pub use orchestration::{
+    // Orchestration functions
+    orchestration::{
+        keep as orchestration_keep,
+        activate as orchestration_activate,
+        deactivate as orchestration_deactivate,
+        trigger as orchestration_trigger,
+        get as orchestration_get,
+        list as orchestration_list,
+        forget as orchestration_forget,
+        schedule as orchestration_schedule,
+        monitor as orchestration_monitor,
+        OrchestrationBuilder,
+        OrchestrationConfig,
+        OrchestrationRuntime,
+        OrchestrationStatus,
+        TriggerType,
+        StepType,
+        ParallelStrategy,
+        ErrorStrategy,
+        OrchestrationMetrics,
+    },
+};
+
 // Advanced systems
 pub use talent::{ Talent, TalentType, TalentRegistry };
 pub use breathing::{ QuantumBreathing, BreathingPattern };
@@ -98,7 +125,7 @@ pub use protection::{ ProtectionState, ProtectionType };
 pub use utils::current_timestamp;
 
 //=============================================================================
-// CONVENIENCE MACROS
+// CONVENIENCE MACROS - FIXED FOR RUST 2024
 //=============================================================================
 
 /// Timeout macro - setTimeout equivalent
@@ -175,6 +202,11 @@ pub mod prelude {
         Talent,
         TalentType,
         QuantumBreathing,
+        // Orchestration
+        orchestration_keep,
+        orchestration_activate,
+        orchestration_deactivate,
+        OrchestrationBuilder,
         // Utilities
         current_timestamp,
     };
@@ -232,38 +264,23 @@ impl CyreBuilder {
 
         if self.enable_timekeeper {
             cyre.init_timekeeper().await?;
-            println!("✅ TimeKeeper integration enabled");
+            println!("⚡ TimeKeeper initialized");
         }
 
         if self.enable_breathing {
-            println!("✅ Quantum breathing enabled");
+            println!("🌊 Quantum Breathing enabled");
         }
 
         if self.enable_talents {
-            println!("✅ Talent system enabled");
+            println!("🎯 Talent system enabled");
         }
 
         Ok(cyre)
     }
 }
 
-//=============================================================================
-// FEATURE FLAGS AND CONDITIONAL COMPILATION
-//=============================================================================
-
-#[cfg(feature = "server")]
-pub mod server;
-
-#[cfg(feature = "benchmarks")]
-pub mod benchmarks;
-
-//=============================================================================
-// LIBRARY METADATA
-//=============================================================================
-
-/// Cyre Rust version
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Library description
-pub const DESCRIPTION: &str =
-    "High-performance reactive event manager with TimeKeeper and Task Store";
+impl Default for CyreBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
