@@ -1,11 +1,11 @@
-// src/bin/iot-client-simulator.rs
+// examples/iot-client-simulator.rs
 // IoT Device Simulator - Generates realistic mock data for Smart Home Demo
 // Simulates real IoT devices sending data over HTTP
 
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::sleep;
-use hyper::{Body, Client, Method, Request, Uri};
+use hyper::{ Body, Client, Method, Request, Uri };
 use hyper::client::HttpConnector;
 use hyper::header::CONTENT_TYPE;
 use rand::Rng;
@@ -96,8 +96,13 @@ impl DeviceSimulator {
 
         // Show device summary
         for device in &self.devices {
-            println!("   📱 {} ({}) in {} - Updates every {:?}", 
-                device.device_id, device.device_type, device.room, device.update_interval);
+            println!(
+                "   📱 {} ({}) in {} - Updates every {:?}",
+                device.device_id,
+                device.device_type,
+                device.room,
+                device.update_interval
+            );
         }
         println!();
 
@@ -105,41 +110,49 @@ impl DeviceSimulator {
         loop {
             cycle_count += 1;
             println!("🔄 Simulation Cycle #{}", cycle_count);
-            
+
             let current_time = current_timestamp();
-            
+
             // Process devices one by one to avoid borrow checker issues
             let devices_len = self.devices.len();
             for i in 0..devices_len {
                 let should_update = {
                     let device = &self.devices[i];
-                    current_time - device.last_update >= device.update_interval.as_millis() as u64
+                    current_time - device.last_update >= (device.update_interval.as_millis() as u64)
                 };
-                
+
                 if should_update {
                     // Generate data for this device
                     let (device_info, data) = {
                         let device = &self.devices[i];
-                        let device_info = (device.device_id.clone(), device.device_type.clone(), device.endpoint.clone());
+                        let device_info = (
+                            device.device_id.clone(),
+                            device.device_type.clone(),
+                            device.endpoint.clone(),
+                        );
                         let data = self.generate_device_data_immutable(device, current_time);
                         (device_info, data)
                     };
-                    
+
                     // Update device timestamp
                     self.devices[i].last_update = current_time;
-                    
+
                     // Send the data
                     self.send_device_data_direct(device_info, data).await;
                 }
             }
-            
+
             sleep(Duration::from_secs(2)).await;
         }
     }
 
-    async fn send_device_data_direct(&self, device_info: (String, String, String), data: serde_json::Value) {
+    async fn send_device_data_direct(
+        &self,
+        device_info: (String, String, String),
+        data: serde_json::Value
+    ) {
         let (device_id, device_type, endpoint) = device_info;
-        
+
         let url_str = format!("{}{}", self.server_url, endpoint);
         let uri: Uri = match url_str.parse() {
             Ok(uri) => uri,
@@ -148,11 +161,11 @@ impl DeviceSimulator {
                 return;
             }
         };
-        
+
         println!("📤 Sending data from {} ({})", device_id, device_type);
-        
+
         let body = Body::from(data.to_string());
-        
+
         let request = Request::builder()
             .method(Method::POST)
             .uri(uri)
@@ -166,7 +179,7 @@ impl DeviceSimulator {
                 return;
             }
         };
-        
+
         match self.client.request(request).await {
             Ok(response) => {
                 if response.status().is_success() {
@@ -174,64 +187,116 @@ impl DeviceSimulator {
                         Ok(body_bytes) => {
                             match String::from_utf8(body_bytes.to_vec()) {
                                 Ok(response_text) => {
-                                    if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(&response_text) {
+                                    if
+                                        let Ok(response_json) =
+                                            serde_json::from_str::<serde_json::Value>(
+                                                &response_text
+                                            )
+                                    {
                                         if let Some(success) = response_json["success"].as_bool() {
                                             if success {
-                                                println!("   ✅ Success: {}", response_json["message"].as_str().unwrap_or("OK"));
-                                                if let Some(data) = response_json["data"].as_object() {
-                                                    if let Some(actions) = data.get("actions_taken") {
-                                                        if let Some(actions_array) = actions.as_array() {
+                                                println!(
+                                                    "   ✅ Success: {}",
+                                                    response_json["message"]
+                                                        .as_str()
+                                                        .unwrap_or("OK")
+                                                );
+                                                if
+                                                    let Some(data) =
+                                                        response_json["data"].as_object()
+                                                {
+                                                    if
+                                                        let Some(actions) =
+                                                            data.get("actions_taken")
+                                                    {
+                                                        if
+                                                            let Some(actions_array) =
+                                                                actions.as_array()
+                                                        {
                                                             if !actions_array.is_empty() {
-                                                                println!("   🤖 Automated actions: {:?}", actions_array);
+                                                                println!(
+                                                                    "   🤖 Automated actions: {:?}",
+                                                                    actions_array
+                                                                );
                                                             }
                                                         }
                                                     }
                                                     if let Some(alerts) = data.get("alerts") {
-                                                        if let Some(alerts_array) = alerts.as_array() {
+                                                        if
+                                                            let Some(alerts_array) =
+                                                                alerts.as_array()
+                                                        {
                                                             if !alerts_array.is_empty() {
-                                                                println!("   🚨 Alerts triggered: {:?}", alerts_array);
+                                                                println!(
+                                                                    "   🚨 Alerts triggered: {:?}",
+                                                                    alerts_array
+                                                                );
                                                             }
                                                         }
                                                     }
                                                 }
                                             } else {
-                                                println!("   ❌ Server error: {}", response_json["message"].as_str().unwrap_or("Unknown"));
+                                                println!(
+                                                    "   ❌ Server error: {}",
+                                                    response_json["message"]
+                                                        .as_str()
+                                                        .unwrap_or("Unknown")
+                                                );
                                             }
                                         }
                                     }
-                                },
+                                }
                                 Err(e) => println!("   ❌ Response decode error: {}", e),
                             }
-                        },
+                        }
                         Err(e) => println!("   ❌ Failed to read response body: {}", e),
                     }
                 } else {
                     println!("   ❌ HTTP Error: {}", response.status());
                 }
-            },
+            }
             Err(e) => {
                 println!("   ❌ Connection error: {}", e);
             }
         }
     }
 
-
-
-    fn generate_device_data_immutable(&self, device: &SimulatedDevice, current_time: u64) -> serde_json::Value {
+    fn generate_device_data_immutable(
+        &self,
+        device: &SimulatedDevice,
+        current_time: u64
+    ) -> serde_json::Value {
         // Clone the device state to avoid borrow issues
         let mut device_state = device.state.clone();
-        
+
         match &mut device_state {
-            DeviceState::TemperatureSensor { base_temp, base_humidity, temp_variation, humidity_variation } => {
+            DeviceState::TemperatureSensor {
+                base_temp,
+                base_humidity,
+                temp_variation,
+                humidity_variation,
+            } => {
                 // Simulate daily temperature cycle
                 let hour_of_day = ((current_time / 1000) % 86400) / 3600; // Hour of day (0-23)
-                let daily_temp_adjustment = 3.0 * ((hour_of_day as f64 - 14.0) / 24.0 * 2.0 * std::f64::consts::PI).sin();
-                
-                let mut rng = rand::rng();
-                let temperature = *base_temp + daily_temp_adjustment + rng.random_range(-*temp_variation..*temp_variation);
-                let humidity = (*base_humidity + rng.random_range(-*humidity_variation..*humidity_variation)).clamp(20.0, 95.0);
+                let daily_temp_adjustment =
+                    3.0 *
+                    ((((hour_of_day as f64) - 14.0) / 24.0) * 2.0 * std::f64::consts::PI).sin();
 
-                println!("   🌡️  Temperature: {:.1}°C, Humidity: {:.1}% in {}", temperature, humidity, device.room);
+                let mut rng = rand::rng();
+                let temperature =
+                    *base_temp +
+                    daily_temp_adjustment +
+                    rng.random_range(-*temp_variation..*temp_variation);
+                let humidity = (
+                    *base_humidity + rng.random_range(-*humidity_variation..*humidity_variation)
+                ).clamp(20.0, 95.0);
+
+                println!(
+                    "   🌡️  Temperature: {:.1}°C, Humidity: {:.1}% in {}",
+                    temperature,
+                    humidity,
+                    device.room
+                );
 
                 json!({
                     "device_id": device.device_id,
@@ -242,35 +307,46 @@ impl DeviceSimulator {
                     "battery_level": rng.random_range(75.0..100.0),
                     "timestamp": current_time
                 })
-            },
+            }
 
             DeviceState::SmartLight { is_on, brightness, auto_schedule } => {
                 let mut rng = rand::rng();
                 let hour_of_day = ((current_time / 1000) % 86400) / 3600;
-                
+
                 // Auto-schedule logic
                 if *auto_schedule {
                     let should_be_on = hour_of_day >= 18 || hour_of_day <= 7; // Evening and early morning
-                    if should_be_on != *is_on && rng.random_bool(0.3) { // 30% chance to toggle when it should
+                    if should_be_on != *is_on && rng.random_bool(0.3) {
+                        // 30% chance to toggle when it should
                         *is_on = should_be_on;
                         *brightness = if *is_on { rng.random_range(60.0..100.0) } else { 0.0 };
                     }
                 } else {
                     // Random state changes
-                    if rng.random_bool(0.1) { // 10% chance to change state
+                    if rng.random_bool(0.1) {
+                        // 10% chance to change state
                         *is_on = !*is_on;
                         *brightness = if *is_on { rng.random_range(30.0..100.0) } else { 0.0 };
                     }
                 }
 
-                let action = if *is_on { 
+                let action = if *is_on {
                     if *brightness < 30.0 { "dim" } else { "turn_on" }
-                } else { 
-                    "turn_off" 
+                } else {
+                    "turn_off"
                 };
 
-                println!("   💡 Light {}: {} ({}%) in {}", 
-                    device.device_id, if *is_on { "ON" } else { "OFF" }, *brightness as u8, device.room);
+                println!(
+                    "   💡 Light {}: {} ({}%) in {}",
+                    device.device_id,
+                    if *is_on {
+                        "ON"
+                    } else {
+                        "OFF"
+                    },
+                    *brightness as u8,
+                    device.room
+                );
 
                 json!({
                     "device_id": device.device_id,
@@ -281,19 +357,19 @@ impl DeviceSimulator {
                     "is_on": *is_on,
                     "timestamp": current_time
                 })
-            },
+            }
 
             DeviceState::MotionSensor { sensitivity, last_motion, typical_activity_hours } => {
                 let mut rng = rand::rng();
                 let hour_of_day = ((current_time / 1000) % 86400) / 3600;
-                
+
                 // Higher motion probability during typical activity hours
                 let base_probability = if typical_activity_hours.contains(&(hour_of_day as u8)) {
                     0.25 // 25% chance during active hours
                 } else {
                     0.05 // 5% chance during quiet hours
                 };
-                
+
                 let motion_detected = rng.random_bool(base_probability);
                 let confidence = if motion_detected {
                     rng.random_range(0.7..1.0)
@@ -303,7 +379,11 @@ impl DeviceSimulator {
 
                 if motion_detected {
                     *last_motion = current_time;
-                    println!("   👤 Motion detected in {} (confidence: {:.2})", device.room, confidence);
+                    println!(
+                        "   👤 Motion detected in {} (confidence: {:.2})",
+                        device.room,
+                        confidence
+                    );
                 } else {
                     println!("   👁️  No motion in {} (monitoring)", device.room);
                 }
@@ -317,14 +397,17 @@ impl DeviceSimulator {
                     "sensitivity": *sensitivity,
                     "timestamp": current_time
                 })
-            },
+            }
 
             DeviceState::DoorLock { is_locked, users, last_access } => {
                 let mut rng = rand::rng();
                 let hour_of_day = ((current_time / 1000) % 86400) / 3600;
-                
+
                 // More activity during typical entry/exit times
-                let activity_probability = if (hour_of_day >= 7 && hour_of_day <= 9) || (hour_of_day >= 17 && hour_of_day <= 19) {
+                let activity_probability = if
+                    (hour_of_day >= 7 && hour_of_day <= 9) ||
+                    (hour_of_day >= 17 && hour_of_day <= 19)
+                {
                     0.15 // 15% chance during rush hours
                 } else {
                     0.03 // 3% chance otherwise
@@ -334,17 +417,25 @@ impl DeviceSimulator {
                     let action = if *is_locked { "unlock" } else { "lock" };
                     *is_locked = !*is_locked;
                     *last_access = current_time;
-                    
+
                     let user_id = if !users.is_empty() && rng.random_bool(0.8) {
                         Some(users[rng.random_range(0..users.len())].clone())
                     } else {
                         None
                     };
 
-                    println!("   🔒 Door {} - {} {}", 
-                        device.device_id, 
-                        if *is_locked { "LOCKED" } else { "UNLOCKED" },
-                        user_id.as_ref().map(|u| format!("by {}", u)).unwrap_or("(manual)".to_string())
+                    println!(
+                        "   🔒 Door {} - {} {}",
+                        device.device_id,
+                        if *is_locked {
+                            "LOCKED"
+                        } else {
+                            "UNLOCKED"
+                        },
+                        user_id
+                            .as_ref()
+                            .map(|u| format!("by {}", u))
+                            .unwrap_or("(manual)".to_string())
                     );
 
                     json!({
@@ -358,8 +449,12 @@ impl DeviceSimulator {
                     })
                 } else {
                     // Status check - no action
-                    println!("   🔒 Door {} status: {}", device.device_id, if *is_locked { "LOCKED" } else { "UNLOCKED" });
-                    
+                    println!("   🔒 Door {} status: {}", device.device_id, if *is_locked {
+                        "LOCKED"
+                    } else {
+                        "UNLOCKED"
+                    });
+
                     json!({
                         "device_id": device.device_id,
                         "device_type": "door_lock",
@@ -369,12 +464,12 @@ impl DeviceSimulator {
                         "timestamp": current_time
                     })
                 }
-            },
+            }
 
             DeviceState::EnergyMonitor { device_name, base_usage, usage_pattern } => {
                 let hour_of_day = ((current_time / 1000) % 86400) / 3600;
                 let hourly_multiplier = usage_pattern.get(hour_of_day as usize).unwrap_or(&1.0);
-                
+
                 let mut rng = rand::rng();
                 let variation = rng.random_range(0.8..1.2); // ±20% variation
                 let power_usage = (*base_usage * hourly_multiplier * variation).max(0.0);
@@ -579,8 +674,32 @@ fn create_realistic_devices() -> Vec<SimulatedDevice> {
                 device_name: "Washing Machine".to_string(),
                 base_usage: 500.0,
                 // Usage pattern: mostly off, but high usage in mornings and evenings
-                usage_pattern: vec![0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.8, 1.5, 0.3, 0.2, 0.2, 0.2, 
-                                  0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 1.2, 0.8, 0.3, 0.2, 0.1, 0.1],
+                usage_pattern: vec![
+                    0.1,
+                    0.1,
+                    0.1,
+                    0.1,
+                    0.1,
+                    0.1,
+                    0.8,
+                    1.5,
+                    0.3,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    1.2,
+                    0.8,
+                    0.3,
+                    0.2,
+                    0.1,
+                    0.1
+                ],
             },
         },
         SimulatedDevice {
@@ -594,10 +713,34 @@ fn create_realistic_devices() -> Vec<SimulatedDevice> {
                 device_name: "Air Conditioner".to_string(),
                 base_usage: 1200.0,
                 // Usage pattern: higher during day and evening
-                usage_pattern: vec![0.2, 0.1, 0.1, 0.1, 0.1, 0.3, 0.5, 0.7, 0.8, 0.9, 1.0, 1.2,
-                                  1.3, 1.4, 1.5, 1.4, 1.2, 1.0, 0.9, 0.8, 0.7, 0.5, 0.4, 0.3],
+                usage_pattern: vec![
+                    0.2,
+                    0.1,
+                    0.1,
+                    0.1,
+                    0.1,
+                    0.3,
+                    0.5,
+                    0.7,
+                    0.8,
+                    0.9,
+                    1.0,
+                    1.2,
+                    1.3,
+                    1.4,
+                    1.5,
+                    1.4,
+                    1.2,
+                    1.0,
+                    0.9,
+                    0.8,
+                    0.7,
+                    0.5,
+                    0.4,
+                    0.3
+                ],
             },
-        },
+        }
     ]
 }
 
@@ -606,10 +749,7 @@ fn create_realistic_devices() -> Vec<SimulatedDevice> {
 //=============================================================================
 
 fn current_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
 #[tokio::main]
@@ -622,7 +762,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let server_url = "http://localhost:3001".to_string();
     println!("🔗 Target server: {}", server_url);
-    
+
     // Test server connection using hyper
     let client = hyper::Client::new();
     let dashboard_uri: hyper::Uri = match format!("{}/dashboard", server_url).parse() {
@@ -632,7 +772,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             return Ok(());
         }
     };
-    
+
     match client.get(dashboard_uri).await {
         Ok(response) => {
             if response.status().is_success() {
@@ -640,7 +780,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } else {
                 println!("⚠️ Server responded with status: {}", response.status());
             }
-        },
+        }
         Err(e) => {
             println!("❌ Cannot connect to server: {}", e);
             println!("💡 Make sure the Smart Home Server is running on port 3001");
@@ -651,19 +791,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Initialize simulator with realistic devices
     let mut simulator = DeviceSimulator::new(server_url);
-    
+
     // Add all realistic devices
     let devices = create_realistic_devices();
     for device in devices {
         simulator.add_device(device);
     }
-    
+
     println!();
     println!("🚀 Starting device simulation...");
     println!("⏱️  Updates will be sent at regular intervals");
     println!("🔄 Press Ctrl+C to stop simulation");
     println!();
-    
+
     // Run the simulation
     simulator.run_simulation().await;
 

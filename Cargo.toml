@@ -13,14 +13,25 @@ categories = ["asynchronous", "web-programming", "data-structures"]
 name = "cyre_rust"
 path = "src/lib.rs"
 
-# Core dependencies - stable versions only
+# PERFORMANCE-OPTIMIZED DEPENDENCIES
 [dependencies]
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
 
-# Serialization
+# Serialization (optimized)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# HIGH-PERFORMANCE DATA STRUCTURES (FIX for RwLock issues)
+dashmap = "6.1"           # Lock-free concurrent HashMap
+smallvec = "1.13"         # Stack-allocated vectors
+ahash = "0.8"             # Faster hashing algorithm
+
+# PERFORMANCE UTILITIES
+likely_stable = "0.1"     # Branch prediction hints
+parking_lot = "0.12"      # Faster mutexes (when locks are needed)
+
+# Original dependencies
 rand = "0.9.1"
 axum = "0.8.4"
 tower-http = "0.6.6"
@@ -30,70 +41,68 @@ criterion = "0.6"         # Benchmarking
 tokio-test = "0.4"        # Async testing utilities
 
 [features]
-default = []
+default = ["fast"]
+fast = []                 # Enable all performance optimizations
 benchmarks = []
 server = []
 
-# Aggressive optimization settings
+# AGGRESSIVE OPTIMIZATION SETTINGS (Enhanced)
 [profile.release]
 opt-level = 3              # Maximum optimization
-lto = "thin"               # Link-time optimization
+lto = "fat"               # Aggressive link-time optimization (was "thin")
 codegen-units = 1          # Better optimization at cost of compile time
 panic = "abort"            # Smaller binaries, faster execution
 overflow-checks = false    # Disable integer overflow checks in release
+debug = false             # No debug info in release
+rpath = false             # Disable rpath
+debug-assertions = false  # Disable debug assertions
 
-# Fast development builds
+# ULTRA-FAST DEVELOPMENT BUILDS
 [profile.dev]
 opt-level = 1              # Some optimization for development
 debug = true
 overflow-checks = true
+incremental = true         # Faster recompilation
+debug-assertions = true
 
-# Benchmark profile for accurate performance testing
+# BENCHMARK PROFILE FOR ACCURATE PERFORMANCE TESTING
 [profile.bench]
 inherits = "release"
 debug = true               # Keep debug info for profiling
 lto = "fat"                # Aggressive link-time optimization
 
+# FAST TEST PROFILE
+[profile.test]
+opt-level = 1              # Optimize tests for speed
+debug = true
+overflow-checks = true
+
 # Binary definitions
-
-
 [[bin]]
 name = "cyre_rust"
 path = "src/main.rs"
 
+# PERFORMANCE TEST EXAMPLES
 [[example]]
 name = "simple_usage"
 path = "examples/simple_usage.rs"
 
 [[example]]
-name = "modular_performance_test"
-path = "examples/modular_performance_test.rs"
+name = "performance_benchmark"
+path = "examples/performance_benchmark.rs"
 
 [[example]]
-name = "realistic_performance_test"
-path = "examples/realistic_performance_test.rs"
+name = "lock_free_performance"
+path = "examples/lock_free_performance.rs"
 
 [[example]]
-name = "rust_comeback_test"
-path = "examples/rust_comeback_test.rs"
-
-[[example]]
-name = "final_rust_victory"
-path = "examples/final_rust_victory.rs"
-
-[[example]]
-name = "quick_start"
-path = "examples/quick_start.rs"
-
-[[example]]
-name = "smart_home_demo"
-path = "examples/smart_home_demo.rs"
-
-[[example]]
-name = "simple_iot_demo"
-path = "examples/simple_iot_demo.rs"
-
+name = "zero_allocation_test"
+path = "examples/zero_allocation_test.rs"
 
 [[example]]
 name = "timekeeper_demo"
 path = "examples/timekeeper_demo.rs"
+
+[[example]]
+name = "smart_home_demo"
+path = "examples/smart_home_demo.rs"

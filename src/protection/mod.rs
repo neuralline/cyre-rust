@@ -1,7 +1,7 @@
 // src/protection/mod.rs
-// Protection mechanisms module
+// Protection mechanisms module - FIXED exports
 
 pub mod state;
 
-// Re-export protection types
-pub use state::*;
+// Re-export all protection types explicitly
+pub use state::{ ProtectionState, ProtectionType, ProtectionBuilder };

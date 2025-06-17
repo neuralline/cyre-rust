@@ -84,7 +84,7 @@ impl TalentRegistry {
             }
         };
 
-        let result = talent.execute(payload).await;
+        let result = talent.execute(&payload).await;
         let execution_time = start_time.elapsed().as_millis() as u64;
 
         // Update execution statistics

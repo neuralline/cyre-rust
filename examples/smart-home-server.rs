@@ -1,17 +1,17 @@
-// examples/smart_home_server.rs
+// examples/smart-home-server.rs
 // IoT Smart Home Management Server using Cyre + Axum
 // Clean, modern HTTP server with automatic JSON handling
 
 use cyre_rust::prelude::*;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ Path, Query, State },
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{ get, post },
     Router,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::{ Deserialize, Serialize };
+use serde_json::{ json, Value };
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -113,35 +113,35 @@ struct AppState {
 impl AppState {
     async fn new() -> Self {
         let mut cyre = Cyre::new();
-        
+
         // Initialize TimeKeeper for automation scheduling
         if let Err(e) = cyre.init_timekeeper().await {
             eprintln!("⚠️ TimeKeeper initialization failed: {}", e);
         }
-        
+
         let state = Self {
             cyre: Arc::new(RwLock::new(cyre)),
             devices: Arc::new(RwLock::new(HashMap::new())),
             start_time: current_timestamp(),
             total_events: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
-        
+
         // Setup Cyre channels for all device types
         state.setup_cyre_channels().await;
-        
+
         state
     }
-    
+
     async fn setup_cyre_channels(&self) {
         println!("🔧 Setting up Smart Home Cyre channels...");
-        
+
         let mut cyre = self.cyre.write().await;
-        
+
         // Temperature sensor channel
-        cyre.action(IO::new("device.temperature")
-            .with_name("Temperature Sensor")
-            .with_throttle(1000)); // Throttle rapid sensor readings
-        
+        cyre.action(
+            IO::new("device.temperature").with_name("Temperature Sensor").with_throttle(1000)
+        ); // Throttle rapid sensor readings
+
         cyre.on("device.temperature", {
             let devices = Arc::clone(&self.devices);
             move |payload| {
@@ -159,7 +159,7 @@ impl AppState {
                             data: payload.clone(),
                             is_online: true,
                         });
-                        
+
                         // Smart automation: Alert if temperature too high
                         let alert_level = if data.temperature > 30.0 {
                             "high"
@@ -168,7 +168,7 @@ impl AppState {
                         } else {
                             "normal"
                         };
-                        
+
                         CyreResponse {
                             ok: true,
                             payload: json!({
@@ -179,7 +179,11 @@ impl AppState {
                                 "alert_level": alert_level,
                                 "comfort_index": calculate_comfort_index(data.temperature, data.humidity)
                             }),
-                            message: format!("Temperature recorded: {}°C in {}", data.temperature, data.room),
+                            message: format!(
+                                "Temperature recorded: {}°C in {}",
+                                data.temperature,
+                                data.room
+                            ),
                             error: None,
                             timestamp: current_timestamp(),
                             metadata: Some(json!({"device_type": "temperature_sensor"})),
@@ -197,12 +201,12 @@ impl AppState {
                 })
             }
         });
-        
+
         // Light control channel
-        cyre.action(IO::new("device.light")
-            .with_name("Smart Light Control")
-            .with_change_detection()); // Ignore duplicate commands
-        
+        cyre.action(
+            IO::new("device.light").with_name("Smart Light Control").with_change_detection()
+        ); // Ignore duplicate commands
+
         cyre.on("device.light", {
             let devices = Arc::clone(&self.devices);
             move |payload| {
@@ -210,10 +214,12 @@ impl AppState {
                 Box::pin(async move {
                     if let Ok(data) = serde_json::from_value::<LightControl>(payload.clone()) {
                         let brightness = data.brightness.unwrap_or(100);
-                        let power_usage = if data.state == "on" { 
-                            (brightness as f64 / 100.0) * 10.0 // Watts
-                        } else { 0.0 };
-                        
+                        let power_usage = if data.state == "on" {
+                            ((brightness as f64) / 100.0) * 10.0 // Watts
+                        } else {
+                            0.0
+                        };
+
                         // Update device state
                         let mut devices_map = devices.write().await;
                         devices_map.insert(data.device_id.clone(), DeviceState {
@@ -225,7 +231,7 @@ impl AppState {
                             data: payload.clone(),
                             is_online: true,
                         });
-                        
+
                         CyreResponse {
                             ok: true,
                             payload: json!({
@@ -235,7 +241,12 @@ impl AppState {
                                 "brightness": brightness,
                                 "power_usage": power_usage
                             }),
-                            message: format!("Light {} in {} - brightness {}%", data.state, data.room, brightness),
+                            message: format!(
+                                "Light {} in {} - brightness {}%",
+                                data.state,
+                                data.room,
+                                brightness
+                            ),
                             error: None,
                             timestamp: current_timestamp(),
                             metadata: Some(json!({"device_type": "smart_light"})),
@@ -253,12 +264,10 @@ impl AppState {
                 })
             }
         });
-        
+
         // Motion sensor channel
-        cyre.action(IO::new("device.motion")
-            .with_name("Motion Detection")
-            .with_debounce(500)); // Debounce rapid motion events
-        
+        cyre.action(IO::new("device.motion").with_name("Motion Detection").with_debounce(500)); // Debounce rapid motion events
+
         cyre.on("device.motion", {
             let devices = Arc::clone(&self.devices);
             move |payload| {
@@ -272,17 +281,23 @@ impl AppState {
                             device_type: "motion_sensor".to_string(),
                             room: data.location.clone(),
                             last_update: current_timestamp(),
-                            status: if data.detected { "motion_detected" } else { "clear" }.to_string(),
+                            status: (
+                                if data.detected {
+                                    "motion_detected"
+                                } else {
+                                    "clear"
+                                }
+                            ).to_string(),
                             data: payload.clone(),
                             is_online: true,
                         });
-                        
+
                         let security_action = if data.detected {
                             "Motion detected - monitoring"
                         } else {
                             "Area clear"
                         };
-                        
+
                         CyreResponse {
                             ok: true,
                             payload: json!({
@@ -292,8 +307,13 @@ impl AppState {
                                 "confidence": data.confidence.unwrap_or(0.95),
                                 "security_action": security_action
                             }),
-                            message: format!("Motion {} in {}", 
-                                if data.detected { "detected" } else { "cleared" }, 
+                            message: format!(
+                                "Motion {} in {}",
+                                if data.detected {
+                                    "detected"
+                                } else {
+                                    "cleared"
+                                },
                                 data.location
                             ),
                             error: None,
@@ -313,12 +333,12 @@ impl AppState {
                 })
             }
         });
-        
+
         // Door lock channel
-        cyre.action(IO::new("device.door_lock")
-            .with_name("Smart Door Lock")
-            .with_priority(Priority::High)); // Security is high priority
-        
+        cyre.action(
+            IO::new("device.door_lock").with_name("Smart Door Lock").with_priority(Priority::High)
+        ); // Security is high priority
+
         cyre.on("device.door_lock", {
             let devices = Arc::clone(&self.devices);
             move |payload| {
@@ -336,13 +356,13 @@ impl AppState {
                             data: payload.clone(),
                             is_online: true,
                         });
-                        
+
                         let security_status = match data.action.as_str() {
                             "lock" => "SECURED",
                             "unlock" => "UNLOCKED",
-                            _ => "UNKNOWN"
+                            _ => "UNKNOWN",
                         };
-                        
+
                         CyreResponse {
                             ok: true,
                             payload: json!({
@@ -370,11 +390,10 @@ impl AppState {
                 })
             }
         });
-        
+
         // Energy monitoring channel
-        cyre.action(IO::new("device.energy")
-            .with_name("Energy Monitor"));
-        
+        cyre.action(IO::new("device.energy").with_name("Energy Monitor"));
+
         cyre.on("device.energy", {
             let devices = Arc::clone(&self.devices);
             move |payload| {
@@ -392,8 +411,8 @@ impl AppState {
                             data: payload.clone(),
                             is_online: true,
                         });
-                        
-                        let hourly_cost = data.consumption_watts * 0.12 / 1000.0; // $0.12 per kWh
+
+                        let hourly_cost = (data.consumption_watts * 0.12) / 1000.0; // $0.12 per kWh
                         let efficiency_rating = if data.consumption_watts < 100.0 {
                             "excellent"
                         } else if data.consumption_watts < 500.0 {
@@ -401,7 +420,7 @@ impl AppState {
                         } else {
                             "high"
                         };
-                        
+
                         CyreResponse {
                             ok: true,
                             payload: json!({
@@ -412,7 +431,11 @@ impl AppState {
                                 "hourly_cost": hourly_cost,
                                 "efficiency_rating": efficiency_rating
                             }),
-                            message: format!("Energy monitoring: {} using {:.1}W", data.device_name, data.consumption_watts),
+                            message: format!(
+                                "Energy monitoring: {} using {:.1}W",
+                                data.device_name,
+                                data.consumption_watts
+                            ),
                             error: None,
                             timestamp: current_timestamp(),
                             metadata: Some(json!({"device_type": "energy_monitor"})),
@@ -430,7 +453,7 @@ impl AppState {
                 })
             }
         });
-        
+
         println!("✅ Smart Home Cyre channels setup complete");
     }
 }
@@ -442,23 +465,25 @@ impl AppState {
 // Temperature sensor endpoint
 async fn handle_temperature(
     State(state): State<Arc<AppState>>,
-    Json(data): Json<TemperatureData>,
+    Json(data): Json<TemperatureData>
 ) -> Result<Json<ApiResponse<Value>>, StatusCode> {
     let start_time = std::time::Instant::now();
     state.total_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+
     let cyre = state.cyre.read().await;
     let response = cyre.call("device.temperature", json!(data)).await;
     let processing_time = start_time.elapsed().as_secs_f64() * 1000.0;
-    
+
     if response.ok {
-        Ok(Json(ApiResponse {
-            success: true,
-            data: response.payload,
-            message: response.message,
-            timestamp: response.timestamp,
-            processing_time_ms: Some(processing_time),
-        }))
+        Ok(
+            Json(ApiResponse {
+                success: true,
+                data: response.payload,
+                message: response.message,
+                timestamp: response.timestamp,
+                processing_time_ms: Some(processing_time),
+            })
+        )
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
@@ -467,23 +492,25 @@ async fn handle_temperature(
 // Light control endpoint
 async fn handle_lights(
     State(state): State<Arc<AppState>>,
-    Json(data): Json<LightControl>,
+    Json(data): Json<LightControl>
 ) -> Result<Json<ApiResponse<Value>>, StatusCode> {
     let start_time = std::time::Instant::now();
     state.total_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+
     let cyre = state.cyre.read().await;
     let response = cyre.call("device.light", json!(data)).await;
     let processing_time = start_time.elapsed().as_secs_f64() * 1000.0;
-    
+
     if response.ok {
-        Ok(Json(ApiResponse {
-            success: true,
-            data: response.payload,
-            message: response.message,
-            timestamp: response.timestamp,
-            processing_time_ms: Some(processing_time),
-        }))
+        Ok(
+            Json(ApiResponse {
+                success: true,
+                data: response.payload,
+                message: response.message,
+                timestamp: response.timestamp,
+                processing_time_ms: Some(processing_time),
+            })
+        )
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
@@ -492,23 +519,25 @@ async fn handle_lights(
 // Motion detection endpoint
 async fn handle_motion(
     State(state): State<Arc<AppState>>,
-    Json(data): Json<MotionEvent>,
+    Json(data): Json<MotionEvent>
 ) -> Result<Json<ApiResponse<Value>>, StatusCode> {
     let start_time = std::time::Instant::now();
     state.total_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+
     let cyre = state.cyre.read().await;
     let response = cyre.call("device.motion", json!(data)).await;
     let processing_time = start_time.elapsed().as_secs_f64() * 1000.0;
-    
+
     if response.ok {
-        Ok(Json(ApiResponse {
-            success: true,
-            data: response.payload,
-            message: response.message,
-            timestamp: response.timestamp,
-            processing_time_ms: Some(processing_time),
-        }))
+        Ok(
+            Json(ApiResponse {
+                success: true,
+                data: response.payload,
+                message: response.message,
+                timestamp: response.timestamp,
+                processing_time_ms: Some(processing_time),
+            })
+        )
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
@@ -517,23 +546,25 @@ async fn handle_motion(
 // Door lock endpoint
 async fn handle_door_lock(
     State(state): State<Arc<AppState>>,
-    Json(data): Json<DoorLockEvent>,
+    Json(data): Json<DoorLockEvent>
 ) -> Result<Json<ApiResponse<Value>>, StatusCode> {
     let start_time = std::time::Instant::now();
     state.total_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+
     let cyre = state.cyre.read().await;
     let response = cyre.call("device.door_lock", json!(data)).await;
     let processing_time = start_time.elapsed().as_secs_f64() * 1000.0;
-    
+
     if response.ok {
-        Ok(Json(ApiResponse {
-            success: true,
-            data: response.payload,
-            message: response.message,
-            timestamp: response.timestamp,
-            processing_time_ms: Some(processing_time),
-        }))
+        Ok(
+            Json(ApiResponse {
+                success: true,
+                data: response.payload,
+                message: response.message,
+                timestamp: response.timestamp,
+                processing_time_ms: Some(processing_time),
+            })
+        )
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
@@ -542,23 +573,25 @@ async fn handle_door_lock(
 // Energy monitoring endpoint
 async fn handle_energy(
     State(state): State<Arc<AppState>>,
-    Json(data): Json<EnergyData>,
+    Json(data): Json<EnergyData>
 ) -> Result<Json<ApiResponse<Value>>, StatusCode> {
     let start_time = std::time::Instant::now();
     state.total_events.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+
     let cyre = state.cyre.read().await;
     let response = cyre.call("device.energy", json!(data)).await;
     let processing_time = start_time.elapsed().as_secs_f64() * 1000.0;
-    
+
     if response.ok {
-        Ok(Json(ApiResponse {
-            success: true,
-            data: response.payload,
-            message: response.message,
-            timestamp: response.timestamp,
-            processing_time_ms: Some(processing_time),
-        }))
+        Ok(
+            Json(ApiResponse {
+                success: true,
+                data: response.payload,
+                message: response.message,
+                timestamp: response.timestamp,
+                processing_time_ms: Some(processing_time),
+            })
+        )
     } else {
         Err(StatusCode::BAD_REQUEST)
     }
@@ -567,41 +600,44 @@ async fn handle_energy(
 // Dashboard endpoint - system overview
 async fn get_dashboard(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<QueryParams>,
+    Query(params): Query<QueryParams>
 ) -> Json<ApiResponse<Value>> {
     let devices = state.devices.read().await;
     let uptime = current_timestamp() - state.start_time;
     let total_events = state.total_events.load(std::sync::atomic::Ordering::SeqCst);
-    
+
     // Filter devices by room if specified
     let filtered_devices: HashMap<_, _> = if let Some(room) = &params.room {
-        devices.iter()
+        devices
+            .iter()
             .filter(|(_, device)| device.room == *room)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     } else {
-        devices.iter()
+        devices
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     };
-    
+
     let total_devices = filtered_devices.len();
-    let online_devices = filtered_devices.values().filter(|d| d.is_online).count();
-    
+    let online_devices = filtered_devices
+        .values()
+        .filter(|d| d.is_online)
+        .count();
+
     // Device summary by type
     let mut device_summary = HashMap::new();
     for device in filtered_devices.values() {
         *device_summary.entry(device.device_type.clone()).or_insert(0) += 1;
     }
-    
+
     // Calculate total energy usage
-    let total_energy: f64 = filtered_devices.values()
-        .filter_map(|device| {
-            device.data.get("consumption_watts")
-                .and_then(|v| v.as_f64())
-        })
+    let total_energy: f64 = filtered_devices
+        .values()
+        .filter_map(|device| { device.data.get("consumption_watts").and_then(|v| v.as_f64()) })
         .sum();
-    
+
     Json(ApiResponse {
         success: true,
         data: json!({
@@ -634,26 +670,31 @@ async fn get_dashboard(
 // Get specific device info
 async fn get_device(
     State(state): State<Arc<AppState>>,
-    Path(device_id): Path<String>,
+    Path(device_id): Path<String>
 ) -> Result<Json<ApiResponse<DeviceState>>, (StatusCode, Json<ApiResponse<String>>)> {
     let devices = state.devices.read().await;
-    
+
     if let Some(device) = devices.get(&device_id) {
-        Ok(Json(ApiResponse {
-            success: true,
-            data: device.clone(),
-            message: format!("Device {} found", device_id),
-            timestamp: current_timestamp(),
-            processing_time_ms: None,
-        }))
+        Ok(
+            Json(ApiResponse {
+                success: true,
+                data: device.clone(),
+                message: format!("Device {} found", device_id),
+                timestamp: current_timestamp(),
+                processing_time_ms: None,
+            })
+        )
     } else {
-        Err((StatusCode::NOT_FOUND, Json(ApiResponse {
-            success: false,
-            data: "Device not found".to_string(),
-            message: format!("Device {} not found", device_id),
-            timestamp: current_timestamp(),
-            processing_time_ms: None,
-        })))
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: "Device not found".to_string(),
+                message: format!("Device {} not found", device_id),
+                timestamp: current_timestamp(),
+                processing_time_ms: None,
+            }),
+        ))
     }
 }
 
@@ -665,7 +706,7 @@ fn calculate_comfort_index(temperature: f64, humidity: f64) -> f64 {
     // Simple comfort index calculation
     let temp_comfort = if temperature >= 20.0 && temperature <= 24.0 { 1.0 } else { 0.5 };
     let humidity_comfort = if humidity >= 40.0 && humidity <= 60.0 { 1.0 } else { 0.5 };
-    (temp_comfort + humidity_comfort) / 2.0 * 100.0
+    ((temp_comfort + humidity_comfort) / 2.0) * 100.0
 }
 
 //=============================================================================
@@ -694,17 +735,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/devices/motion", post(handle_motion))
         .route("/devices/door-lock", post(handle_door_lock))
         .route("/devices/energy", post(handle_energy))
-        
+
         // Dashboard and device info
         .route("/dashboard", get(get_dashboard))
         .route("/devices/{device_id}", get(get_device))
-        
         // Add basic CORS headers manually (since tower-http cors feature not enabled)
         .with_state(app_state);
 
     // Start server
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await?;
-    
+
     println!("🌐 Smart Home IoT Server running on http://localhost:3001");
     println!();
     println!("📡 DEVICE ENDPOINTS:");

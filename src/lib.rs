@@ -104,7 +104,7 @@ pub use utils::current_timestamp;
 /// Timeout macro - setTimeout equivalent
 #[macro_export]
 macro_rules! timeout {
-    ($action:expr, $payload:expr, $delay:expr) => {
+    ($action:expr_2021, $payload:expr_2021, $delay:expr_2021) => {
         $crate::timekeeper::set_timeout($action, $payload, $delay)
     };
 }
@@ -112,7 +112,7 @@ macro_rules! timeout {
 /// Interval macro - setInterval equivalent
 #[macro_export]
 macro_rules! interval {
-    ($action:expr, $payload:expr, $interval:expr) => {
+    ($action:expr_2021, $payload:expr_2021, $interval:expr_2021) => {
         $crate::timekeeper::set_interval($action, $payload, $interval)
     };
 }
@@ -120,7 +120,7 @@ macro_rules! interval {
 /// Sleep macro - async delay
 #[macro_export]
 macro_rules! sleep {
-    ($duration:expr) => {
+    ($duration:expr_2021) => {
         $crate::timekeeper::delay($duration)
     };
 }
@@ -228,7 +228,7 @@ impl CyreBuilder {
 
     /// Build the Cyre instance
     pub async fn build(self) -> Result<Cyre, String> {
-        let mut cyre = Cyre::new();
+        let cyre = Cyre::new();
 
         if self.enable_timekeeper {
             cyre.init_timekeeper().await?;

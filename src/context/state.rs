@@ -93,20 +93,20 @@ impl Timeline {
 
     pub fn get(id: &str) -> Option<Timer> {
         let store = get_timeline();
-        if let Ok(timeline_store) = store.lock() {
+        match store.lock() { Ok(timeline_store) => {
             timeline_store.get(id)
-        } else {
+        } _ => {
             None
-        }
+        }}
     }
 
     pub fn forget(id: &str) -> bool {
         let store = get_timeline();
-        if let Ok(mut timeline_store) = store.lock() {
+        match store.lock() { Ok(mut timeline_store) => {
             timeline_store.forget(id)
-        } else {
+        } _ => {
             false
-        }
+        }}
     }
 
     pub fn clear() {
@@ -118,20 +118,20 @@ impl Timeline {
 
     pub fn get_all() -> Vec<Timer> {
         let store = get_timeline();
-        if let Ok(timeline_store) = store.lock() {
+        match store.lock() { Ok(timeline_store) => {
             timeline_store.get_all()
-        } else {
+        } _ => {
             Vec::new()
-        }
+        }}
     }
 
     pub fn get_active() -> Vec<Timer> {
         let store = get_timeline();
-        if let Ok(timeline_store) = store.lock() {
+        match store.lock() { Ok(timeline_store) => {
             timeline_store.get_active()
-        } else {
+        } _ => {
             Vec::new()
-        }
+        }}
     }
 }
 
