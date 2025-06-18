@@ -112,12 +112,7 @@ struct AppState {
 
 impl AppState {
     async fn new() -> Self {
-        let mut cyre = Cyre::new();
-
-        // Initialize TimeKeeper for automation scheduling
-        if let Err(e) = cyre.init_timekeeper().await {
-            eprintln!("⚠️ TimeKeeper initialization failed: {}", e);
-        }
+        let cyre = Cyre::new();
 
         let state = Self {
             cyre: Arc::new(RwLock::new(cyre)),

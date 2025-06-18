@@ -28,6 +28,19 @@ async fn pure_speed_test() -> BenchmarkResult {
     println!("⚡ PURE SPEED TEST - No holds barred!");
 
     let mut cyre = Cyre::new();
+
+    // Initialize Cyre asynchronously
+    if let Err(e) = cyre.init().await {
+        eprintln!("Failed to initialize Cyre: {}", e);
+        return BenchmarkResult {
+            name: "Pure Speed Test".to_string(),
+            ops_per_sec: 0,
+            total_ops: 0,
+            duration_ms: 0.0,
+            avg_latency_us: 0.0,
+        };
+    }
+
     let operations = 100_000u64;
 
     // Setup PURE fast path - zero protection
@@ -77,6 +90,19 @@ async fn batch_processing_test() -> BenchmarkResult {
     println!("\n📦 BATCH PROCESSING TEST - Amortize that overhead!");
 
     let mut cyre = Cyre::new();
+
+    // Initialize Cyre asynchronously
+    if let Err(e) = cyre.init().await {
+        eprintln!("Failed to initialize Cyre: {}", e);
+        return BenchmarkResult {
+            name: "Batch Processing".to_string(),
+            ops_per_sec: 0,
+            total_ops: 0,
+            duration_ms: 0.0,
+            avg_latency_us: 0.0,
+        };
+    }
+
     let batch_size = 1000;
     let num_batches = 500;
     let total_operations = batch_size * num_batches;
@@ -136,6 +162,19 @@ async fn multi_channel_test() -> BenchmarkResult {
     println!("\n🔀 MULTI-CHANNEL TEST - Total throughput measurement!");
 
     let mut cyre = Cyre::new();
+
+    // Initialize Cyre asynchronously
+    if let Err(e) = cyre.init().await {
+        eprintln!("Failed to initialize Cyre: {}", e);
+        return BenchmarkResult {
+            name: "Multi-Channel".to_string(),
+            ops_per_sec: 0,
+            total_ops: 0,
+            duration_ms: 0.0,
+            avg_latency_us: 0.0,
+        };
+    }
+
     let num_channels = 10;
     let ops_per_channel = 20_000;
     let total_operations = num_channels * ops_per_channel;
@@ -188,6 +227,19 @@ async fn zero_allocation_test() -> BenchmarkResult {
     println!("\n💾 ZERO ALLOCATION TEST - Memory efficiency master class!");
 
     let mut cyre = Cyre::new();
+
+    // Initialize Cyre asynchronously
+    if let Err(e) = cyre.init().await {
+        eprintln!("Failed to initialize Cyre: {}", e);
+        return BenchmarkResult {
+            name: "Zero Allocation".to_string(),
+            ops_per_sec: 0,
+            total_ops: 0,
+            duration_ms: 0.0,
+            avg_latency_us: 0.0,
+        };
+    }
+
     let operations = 75_000u64;
 
     cyre.action(IO::new("zero-alloc"));

@@ -12,7 +12,6 @@ use axum::{
 };
 use serde::{ Deserialize, Serialize };
 use serde_json::{ json, Value };
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{ AtomicU64, Ordering };
 use tokio::sync::RwLock;
@@ -94,12 +93,9 @@ struct AppState {
 
 impl AppState {
     async fn new() -> Self {
-        let mut cyre = Cyre::new();
+        let cyre = Cyre::new();
 
         // Initialize TimeKeeper for advanced scheduling
-        if let Err(e) = cyre.init_timekeeper().await {
-            eprintln!("⚠️ TimeKeeper initialization failed: {}", e);
-        }
 
         let state = Self {
             cyre: Arc::new(RwLock::new(cyre)),

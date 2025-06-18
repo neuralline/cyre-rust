@@ -7,6 +7,7 @@
 
 // Core types module
 pub mod types;
+pub mod config;
 
 // Other modules
 pub mod breathing; // Quantum breathing system
@@ -91,7 +92,6 @@ pub use context::{
     ISubscriber,
     BranchStore,
     MetricsOps,
-    PayloadStateOps,
     // Legacy compatibility
     get_timeline,
     Timeline,
@@ -108,199 +108,192 @@ pub use context::{
     LogLevel,
     Sensor,
     SENSOR,
-};
-
-// Orchestration system
-pub use orchestration::{
-    // Orchestration functions
-    orchestration::{
-        keep as orchestration_keep,
-        activate as orchestration_activate,
-        deactivate as orchestration_deactivate,
-        trigger as orchestration_trigger,
-        get as orchestration_get,
-        list as orchestration_list,
-        forget as orchestration_forget,
-        schedule as orchestration_schedule,
-        monitor as orchestration_monitor,
-    },
-    // Orchestration types
-    OrchestrationBuilder,
-    OrchestrationConfig,
-    OrchestrationRuntime,
-    OrchestrationStatus,
-    TriggerType,
-    StepType,
-    ParallelStrategy,
-    ErrorStrategy,
-    OrchestrationMetrics,
+    // Metrics state system
+    metrics_get,
+    metrics_set,
+    metrics_update,
+    metrics_reset,
+    metrics_init,
+    metrics_lock,
+    metrics_unlock,
+    metrics_shutdown,
+    metrics_is_init,
+    metrics_is_locked,
+    metrics_is_shutdown,
+    metrics_breath,
+    metrics_system,
+    metrics_response,
+    metrics_store,
+    metrics_status,
+    metrics_summary,
+    QuantumState,
+    SystemMetrics,
+    BreathingState,
+    PerformanceMetrics,
+    SystemStress,
+    StoreMetrics,
+    HealthSummary,
+    BreathingInfo,
+    PerformanceSummary,
+    StoreSummary,
+    BreathingUpdate,
+    SystemUpdate,
+    StoreUpdate,
 };
 
 // Breathing system
-pub use breathing::QuantumBreathing;
+pub use breathing::{
+    start_breathing,
+    stop_breathing,
+    is_breathing,
+    force_breath,
+    get_breathing_status,
+    is_in_recuperation,
+    is_hibernating,
+    get_stress_level,
+};
 
-// Utils
-pub use utils::current_timestamp;
+// Utility functions
+pub use utils::{ current_timestamp, generate_id };
 
 //=============================================================================
-// MACROS
+// MAIN LIBRARY INITIALIZATION FUNCTION
 //=============================================================================
 
-/// Timeout macro - setTimeout equivalent
-#[macro_export]
-macro_rules! timeout {
-    ($action:expr_2021, $payload:expr_2021, $delay:expr_2021) => {
-        $crate::timekeeper::set_timeout($action, $payload, $delay)
-    };
+/// Initialize a new Cyre instance with full system setup
+pub async fn init() -> Result<Cyre, Box<dyn std::error::Error>> {
+    let mut cyre = Cyre::new();
+
+    // Initialize the core system
+    match cyre.init().await {
+        Ok(_response) => {
+            // Cyre initialization includes:
+            // - Metrics system initialization
+            // - Breathing system startup
+            // - State stores initialization
+            Ok(cyre)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
-/// Interval macro - setInterval equivalent
-#[macro_export]
-macro_rules! interval {
-    ($action:expr_2021, $payload:expr_2021, $interval:expr_2021) => {
-        $crate::timekeeper::set_interval($action, $payload, $interval)
-    };
+/// Create a new Cyre instance (alias for convenience)
+pub fn new() -> Cyre {
+    Cyre::new()
 }
 
-/// Sleep macro - async delay
-#[macro_export]
-macro_rules! sleep {
-    ($duration:expr_2021) => {
-        $crate::timekeeper::delay($duration)
-    };
+/// Quick setup function for common use cases
+pub async fn quick_setup() -> Result<Cyre, Box<dyn std::error::Error>> {
+    init().await
 }
 
 //=============================================================================
-// PRELUDE MODULE FOR CONVENIENCE
+// VERSION AND METADATA
 //=============================================================================
 
-/// Complete imports for Cyre users
+/// Current Cyre version
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Library metadata
+pub const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
+
+/// Get runtime information
+pub fn runtime_info() -> serde_json::Value {
+    serde_json::json!({
+        "version": VERSION,
+        "description": DESCRIPTION,
+        "features": [
+            "reactive_events",
+            "quantum_breathing",
+            "state_management",
+            "protection_systems",
+            "timeline_tracking",
+            "metrics_monitoring"
+        ],
+        "timestamp": utils::current_timestamp()
+    })
+}
+
+//=============================================================================
+// PRELUDE MODULE FOR CONVENIENT IMPORTS
+//=============================================================================
+
+/// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        // Core Cyre
+        // Core types
         Cyre,
         IO,
-        CyreResponse,
         ActionPayload,
+        CyreResponse,
         Priority,
-        // TimeKeeper
-        TimeKeeper,
-        Formation,
-        FormationBuilder,
-        TimerRepeat,
-        get_timekeeper,
-        set_timeout,
-        set_interval,
-        clear_timer,
-        delay,
-        // Task Store (from context)
+        // Main functions
+        init,
+        new,
+        quick_setup,
+        // State management
+        io,
+        subscribers,
+        timeline,
+        stores,
+        // Metrics
+        metrics_init,
+        metrics_status,
+        metrics_summary,
+        // Breathing
+        start_breathing,
+        stop_breathing,
+        is_breathing,
+        // Task store
         task_keep,
         task_forget,
         task_activate,
         task_get,
-        task_list,
-        task_stats,
-        task_timeout,
-        task_interval,
-        task_complex,
-        TaskBuilder,
-        TaskStatus,
-        TaskType,
-        TaskPriority,
-        TaskRepeat,
-        Task,
-        TaskConfig,
-        TaskResult,
-        TaskStats,
-        // Timeline
-        get_timeline,
-        Timeline,
-        TimelineStore,
-        // Sensor System - NEW
+        // Sensor
         sensor_log,
-        sensor_success,
         sensor_error,
-        sensor_warn,
-        sensor_info,
-        sensor_debug,
-        sensor_critical,
-        sensor_sys,
-        LogLevel,
-        Sensor,
-        SENSOR,
-        // Advanced systems
-        QuantumBreathing,
-        // Orchestration
-        orchestration_keep,
-        orchestration_activate,
-        OrchestrationBuilder,
+        sensor_success,
         // Utilities
         current_timestamp,
+        generate_id,
+        // Pipeline functions for tests
     };
-
-    // Macros
-    pub use crate::{ timeout, interval, sleep };
-
-    // Common async traits
-    pub use std::future::Future;
-    pub use std::pin::Pin;
-    pub use serde_json::{ json, Value };
 }
 
 //=============================================================================
-// CYRE BUILDER
+// TESTS
 //=============================================================================
 
-/// Enhanced Cyre builder
-pub struct CyreBuilder {
-    enable_timekeeper: bool,
-    enable_breathing: bool,
-    enable_talents: bool,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl CyreBuilder {
-    pub fn new() -> Self {
-        Self {
-            enable_timekeeper: true,
-            enable_breathing: true,
-            enable_talents: true,
-        }
+    #[tokio::test]
+    async fn test_library_initialization() {
+        let cyre = init().await;
+        assert!(cyre.is_ok());
+
+        let cyre = cyre.unwrap();
+        assert!(cyre.is_initialized());
     }
 
-    /// Enable/disable TimeKeeper integration
-    pub fn with_timekeeper(mut self, enabled: bool) -> Self {
-        self.enable_timekeeper = enabled;
-        self
+    #[test]
+    fn test_runtime_info() {
+        let info = runtime_info();
+        assert!(info["version"].is_string());
+        assert!(info["features"].is_array());
+        assert!(info["timestamp"].is_number());
     }
 
-    /// Enable/disable quantum breathing
-    pub fn with_breathing(mut self, enabled: bool) -> Self {
-        self.enable_breathing = enabled;
-        self
+    #[test]
+    fn test_version_constants() {
+        assert!(!VERSION.is_empty());
+        assert!(!DESCRIPTION.is_empty());
     }
 
-    /// Enable/disable talent system
-    pub fn with_talents(mut self, enabled: bool) -> Self {
-        self.enable_talents = enabled;
-        self
-    }
-
-    /// Build the Cyre instance
-    pub async fn build(self) -> Result<Cyre, String> {
-        let cyre = Cyre::new();
-
-        if self.enable_timekeeper {
-            cyre.init_timekeeper().await?;
-        }
-
-        // Additional initialization would go here
-
-        Ok(cyre)
-    }
-}
-
-impl Default for CyreBuilder {
-    fn default() -> Self {
-        Self::new()
+    #[tokio::test]
+    async fn test_quick_setup() {
+        let result = quick_setup().await;
+        assert!(result.is_ok());
     }
 }

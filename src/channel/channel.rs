@@ -1,18 +1,17 @@
 // src/channel/channel.rs
 // File location: src/channel/channel.rs
-// Unified channel management using centralized context/state IO store
+// Simplified channel management using centralized context/state
 
 //=============================================================================
 // IMPORTS
 //=============================================================================
 
 use crate::types::{ IO, AsyncHandler, CyreResponse, ActionPayload };
-use crate::context::state::{ io, subscribers, ISubscriber, PayloadStateOps };
+use crate::context::state::{ io, subscribers, ISubscriber };
 use crate::context::sensor;
 use crate::utils::current_timestamp;
 use std::sync::Arc;
-use serde_json::json;
-use serde_json::Value as JsonValue;
+use serde_json::{ json, Value as JsonValue };
 
 //=============================================================================
 // CHANNEL INFORMATION
@@ -39,10 +38,6 @@ pub struct ChannelInfo {
 pub struct ChannelManager;
 
 impl ChannelManager {
-    //=========================================================================
-    // CHANNEL CREATION - USING CENTRALIZED IO STORE
-    //=========================================================================
-
     /// Create new channel in centralized IO store
     pub fn create(config: IO) -> Result<(), String> {
         let action_id = config.id.clone();
@@ -53,16 +48,9 @@ impl ChannelManager {
         // Validate configuration
         Self::validate_config(&config)?;
 
-        // Store in centralized IO store
-        match io::set(config) {
-            Ok(_) => {
-                // sensor::success(
-                //     "channel",
-                //     &format!("Channel '{}' created successfully", action_id),
-                //     false
-                // );
-                Ok(())
-            }
+        // Store in centralized IO store with correct signature
+        match io::set(action_id.clone(), config) {
+            Ok(_) => Ok(()),
             Err(e) => {
                 sensor::error(
                     "channel",
@@ -95,20 +83,17 @@ impl ChannelManager {
         // Wrap handler with proper type
         let async_handler: AsyncHandler = Arc::new(handler);
 
-        // Create subscriber
+        // Create subscriber with all required fields
         let subscriber = ISubscriber {
             id: action_id.to_string(),
             handler: async_handler,
+            active: true,
             created_at: current_timestamp(),
         };
 
         // Store in centralized subscriber store
-        match subscribers::add(subscriber) {
-            Ok(_) => {
-                // Clear any existing payload for this channel
-                PayloadStateOps::forget(&action_id.to_string());
-                Ok(())
-            }
+        match subscribers::set(action_id.to_string(), subscriber) {
+            Ok(_) => Ok(()),
             Err(e) => {
                 sensor::error(
                     "channel",
@@ -121,35 +106,6 @@ impl ChannelManager {
         }
     }
 
-    /// Create channel and register handler in one operation
-    pub fn create_with_handler<F>(config: IO, handler: F) -> Result<(), String>
-        where
-            F: Fn(
-                ActionPayload
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CyreResponse> + Send>> +
-                Send +
-                Sync +
-                'static
-    {
-        let action_id = config.id.clone();
-
-        // Create channel first
-        Self::create(config)?;
-
-        // Register handler
-        Self::register_handler(&action_id, handler)?;
-
-        // Clear any existing payload for this channel
-        PayloadStateOps::forget(&action_id);
-
-        // sensor::success("channel", &format!("Channel '{}' created with handler", action_id), false);
-        Ok(())
-    }
-
-    //=========================================================================
-    // CHANNEL MANAGEMENT - USING CENTRALIZED STORES
-    //=========================================================================
-
     /// Get channel information from centralized stores
     pub fn get_info(action_id: &str) -> Option<ChannelInfo> {
         // Get config from centralized IO store
@@ -157,9 +113,6 @@ impl ChannelManager {
 
         // Check if handler exists in centralized subscriber store
         let has_handler = subscribers::get(action_id).is_some();
-
-        // Get latest payload if exists
-        let latest_payload = PayloadStateOps::get(&action_id.to_string());
 
         Some(ChannelInfo {
             id: action_id.to_string(),
@@ -169,7 +122,7 @@ impl ChannelManager {
             created_at: config.timestamp.unwrap_or(current_timestamp()),
             last_execution: config._last_exec_time,
             execution_count: config._execution_count,
-            latest_payload,
+            latest_payload: None, // Simplified - no payload tracking for now
         })
     }
 
@@ -181,7 +134,7 @@ impl ChannelManager {
         Self::validate_config(&config)?;
 
         // Update in centralized IO store
-        match io::set(config) {
+        match io::set(action_id.clone(), config) {
             Ok(_) => {
                 sensor::info(
                     "channel",
@@ -209,9 +162,6 @@ impl ChannelManager {
         // Remove handler from centralized subscriber store
         subscribers::forget(action_id);
 
-        // Remove payload from centralized payload store
-        PayloadStateOps::forget(&action_id.to_string());
-
         // Remove config from centralized IO store
         let removed = io::forget(action_id);
 
@@ -229,32 +179,6 @@ impl ChannelManager {
         }
     }
 
-    /// Modify channel configuration using a function
-    pub fn modify<F>(action_id: &str, modifier: F) -> Result<(), String> where F: FnOnce(&mut IO) {
-        // Get current config from centralized store
-        let mut config = match io::get(action_id) {
-            Some(config) => config,
-            None => {
-                let error = format!("Channel '{}' not found", action_id);
-                sensor::error("channel", &error, Some("ChannelManager::modify"), None);
-                return Err(error);
-            }
-        };
-
-        // Apply modifier
-        modifier(&mut config);
-
-        // Update timestamp
-        config.timestamp = Some(current_timestamp());
-
-        // Store back in centralized store
-        Self::update(config)
-    }
-
-    //=========================================================================
-    // EXISTENCE CHECKS - USING CENTRALIZED STORES
-    //=========================================================================
-
     /// Check if channel exists in centralized IO store
     pub fn exists(action_id: &str) -> bool {
         io::get(action_id).is_some()
@@ -265,146 +189,34 @@ impl ChannelManager {
         subscribers::get(action_id).is_some()
     }
 
-    //=========================================================================
-    // LISTING OPERATIONS - USING CENTRALIZED STORES
-    //=========================================================================
-
-    /// List all channel IDs from centralized IO store
-    pub fn list_all() -> Vec<String> {
-        io::get_all()
-            .into_iter()
-            .map(|config| config.id)
-            .collect()
-    }
-
-    /// List channels by group from centralized IO store
-    pub fn list_by_group(group: &str) -> Vec<String> {
-        io::get_all()
-            .into_iter()
-            .filter(|config| config.group.as_ref().map_or(false, |g| g == group))
-            .map(|config| config.id)
-            .collect()
-    }
-
-    /// List channels by path prefix from centralized IO store
-    pub fn list_by_path(path_prefix: &str) -> Vec<String> {
-        io::get_all()
-            .into_iter()
-            .filter(|config| config.path.as_ref().map_or(false, |p| p.starts_with(path_prefix)))
-            .map(|config| config.id)
-            .collect()
-    }
-
-    /// Get all channel information from centralized stores
-    pub fn get_all_info() -> Vec<ChannelInfo> {
+    /// List all channels
+    pub fn list_all_channels() -> Vec<ChannelInfo> {
         io::get_all()
             .into_iter()
             .filter_map(|config| Self::get_info(&config.id))
             .collect()
     }
 
-    //=========================================================================
-    // SYSTEM SUMMARY - USING CENTRALIZED STORES
-    //=========================================================================
-
-    /// Get system summary from centralized stores
-    pub fn get_system_summary() -> serde_json::Value {
-        let all_configs = io::get_all();
-        let total_channels = all_configs.len();
-        let total_handlers = subscribers::get_all().len();
-
-        // Analyze channel types
-        let with_throttle = all_configs
-            .iter()
-            .filter(|c| c.throttle.is_some())
-            .count();
-        let with_debounce = all_configs
-            .iter()
-            .filter(|c| c.debounce.is_some())
-            .count();
-        let with_change_detection = all_configs
-            .iter()
-            .filter(|c| c._has_change_detection)
-            .count();
-        let fast_path_eligible = all_configs
-            .iter()
-            .filter(|c| c.is_fast_path_eligible())
-            .count();
-
-        json!({
-            "total_channels": total_channels,
-            "total_handlers": total_handlers,
-            "coverage": if total_channels > 0 {
-                (total_handlers as f64 / total_channels as f64) * 100.0
-            } else {
-                0.0
-            },
-            "protection_analysis": {
-                "with_throttle": with_throttle,
-                "with_debounce": with_debounce,
-                "with_change_detection": with_change_detection,
-                "fast_path_eligible": fast_path_eligible,
-                "fast_path_percentage": if total_channels > 0 {
-                    (fast_path_eligible as f64 / total_channels as f64) * 100.0
-                } else {
-                    0.0
-                }
-            }
-        })
-    }
-
-    //=========================================================================
-    // VALIDATION - PRIVATE HELPER
-    //=========================================================================
-
     /// Validate channel configuration
     fn validate_config(config: &IO) -> Result<(), String> {
-        // Check ID
         if config.id.trim().is_empty() {
             return Err("Channel ID cannot be empty".to_string());
         }
-
-        // Check for invalid characters in ID
-        if config.id.contains(char::is_whitespace) {
-            return Err("Channel ID cannot contain whitespace".to_string());
-        }
-
-        // Validate throttle value
-        if let Some(throttle) = config.throttle {
-            if throttle == 0 {
-                return Err("Throttle value must be greater than 0".to_string());
-            }
-        }
-
-        // Validate debounce value
-        if let Some(debounce) = config.debounce {
-            if debounce == 0 {
-                return Err("Debounce value must be greater than 0".to_string());
-            }
-        }
-
-        // Validate max_wait with debounce
-        if let (Some(_), Some(max_wait)) = (config.debounce, config.max_wait) {
-            if max_wait == 0 {
-                return Err("Max wait value must be greater than 0".to_string());
-            }
-        }
-
         Ok(())
     }
 }
 
 //=============================================================================
-// BACKWARD COMPATIBILITY FUNCTIONS
+// PUBLIC API FUNCTIONS
 //=============================================================================
 
-/// Backward compatibility functions that delegate to the unified implementation
-
+/// Create a new channel
 pub fn create_channel(config: IO) -> Result<(), String> {
     ChannelManager::create(config)
 }
 
-pub fn register_handler<F>(action_id: &str, handler: F) -> Result<(), String>
+/// Create channel and register handler
+pub fn channel<F>(config: IO, handler: F) -> Result<(), String>
     where
         F: Fn(
             ActionPayload
@@ -413,25 +225,110 @@ pub fn register_handler<F>(action_id: &str, handler: F) -> Result<(), String>
             Sync +
             'static
 {
-    ChannelManager::register_handler(action_id, handler)
+    let action_id = config.id.clone();
+
+    // Create channel first
+    ChannelManager::create(config)?;
+
+    // Register handler
+    ChannelManager::register_handler(&action_id, handler)?;
+
+    Ok(())
 }
 
+/// Get channel info
 pub fn get_channel_info(action_id: &str) -> Option<ChannelInfo> {
     ChannelManager::get_info(action_id)
 }
 
+/// Check if channel exists
 pub fn channel_exists(action_id: &str) -> bool {
     ChannelManager::exists(action_id)
 }
 
-pub fn handler_exists(action_id: &str) -> bool {
-    ChannelManager::has_handler(action_id)
+/// List all channels
+pub fn list_all_channels() -> Vec<ChannelInfo> {
+    ChannelManager::list_all_channels()
 }
 
-pub fn list_all_channels() -> Vec<String> {
-    ChannelManager::list_all()
+/// Remove a channel
+pub fn remove_channel(action_id: &str) -> Result<(), String> {
+    ChannelManager::forget(action_id)
 }
 
-pub fn get_system_summary() -> serde_json::Value {
-    ChannelManager::get_system_summary()
+//=============================================================================
+// TESTS
+//=============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CyreResponse;
+    use std::pin::Pin;
+    use std::future::Future;
+
+    fn mock_handler() -> AsyncHandler {
+        Arc::new(|_payload| {
+            Box::pin(async move { CyreResponse {
+                    ok: true,
+                    payload: json!({}),
+                    message: "Mock response".to_string(),
+                    error: None,
+                    timestamp: current_timestamp(),
+                    metadata: None,
+                } }) as Pin<Box<dyn Future<Output = CyreResponse> + Send>>
+        })
+    }
+
+    #[test]
+    fn test_channel_creation() {
+        // Clear state first
+        io::clear();
+        subscribers::clear();
+
+        let config = IO::new("test-channel");
+        let result = ChannelManager::create(config);
+        assert!(result.is_ok());
+        assert!(ChannelManager::exists("test-channel"));
+    }
+
+    #[test]
+    fn test_channel_info() {
+        // Clear state first
+        io::clear();
+        subscribers::clear();
+
+        let config = IO::new("test-info-channel");
+        let _ = ChannelManager::create(config);
+
+        let info = ChannelManager::get_info("test-info-channel");
+        assert!(info.is_some());
+
+        let info = info.unwrap();
+        assert_eq!(info.id, "test-info-channel");
+        assert!(!info.has_handler); // No handler registered yet
+    }
+
+    #[test]
+    fn test_channel_with_handler() {
+        // Clear state first
+        io::clear();
+        subscribers::clear();
+
+        let config = IO::new("test-handler-channel");
+        let result = channel(config, |_payload| {
+            Box::pin(async move { CyreResponse {
+                    ok: true,
+                    payload: json!({}),
+                    message: "Test response".to_string(),
+                    error: None,
+                    timestamp: current_timestamp(),
+                    metadata: None,
+                } })
+        });
+
+        assert!(result.is_ok());
+        assert!(ChannelManager::exists("test-handler-channel"));
+        assert!(ChannelManager::has_handler("test-handler-channel"));
+    }
 }
