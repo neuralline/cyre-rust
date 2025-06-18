@@ -1,4 +1,4 @@
-// src/core/cyre.rs
+// src/core/cyre.rs - COMPLETE FILE with Cyre struct definition
 // File location: src/core/cyre.rs
 // Main Cyre implementation - Core orchestration and action management
 
@@ -6,13 +6,12 @@
 // IMPORTS
 //=============================================================================
 
-use crate::types::{ ActionPayload, CyreResponse, IO, AsyncHandler };
+use crate::types::{ ActionPayload, CyreResponse, IO };
 use crate::context::state;
 use crate::context::{ metrics_state, sensor };
 use crate::breathing::{ start_breathing, stop_breathing, is_breathing };
 use crate::config::Messages;
 use crate::utils::current_timestamp;
-use std::sync::Arc;
 use serde_json::json;
 
 //=============================================================================
@@ -28,7 +27,7 @@ pub struct Cyre {
 impl Cyre {
     /// Create a new Cyre instance
     pub fn new() -> Self {
-        sensor::info("system", Messages::WELCOME, true);
+        sensor::debug("system", Messages::WELCOME, true);
         Self {
             is_initialized: false,
         }
@@ -46,6 +45,7 @@ impl Cyre {
                 metadata: None,
             });
         }
+        sensor::sys("system", Messages::SYS.to_string(), true);
 
         // Initialize metrics
         let _ = metrics_state::init();
@@ -54,8 +54,6 @@ impl Cyre {
         start_breathing();
 
         self.is_initialized = true;
-
-        //sensor::success("cyre", "System initialized successfully", Some("Cyre::init"), None);
 
         Ok(CyreResponse {
             ok: true,
@@ -89,14 +87,14 @@ impl Cyre {
             return Err(format!("Action '{}' already exists", action_id));
         }
 
-        // Clone config for pipeline compilation
-        let mut config_for_pipeline = config.clone();
+        // Step 1: Get existing action from context/state (if any) or use new config
+        let mut action = config;
 
-        // Compile pipeline first
-        crate::pipeline::compile_pipeline(&action_id, &mut config_for_pipeline)?;
+        // Step 2: Compile pipeline using the action
+        crate::pipeline::compile_pipeline(&mut action)?;
 
-        // Store the action configuration with compiled pipeline info
-        state::io::set(action_id.clone(), config_for_pipeline)?;
+        // Step 3: Store action with compiled pipeline back to context/state
+        state::io::set(action_id.clone(), action)?;
 
         sensor::info("cyre", &format!("Action '{}' registered successfully", action_id), false);
 
@@ -125,7 +123,9 @@ impl Cyre {
         }
 
         // Create the handler wrapper
-        let handler_arc: AsyncHandler = Arc::new(move |payload| { Box::pin(handler(payload)) });
+        let handler_arc: crate::types::AsyncHandler = std::sync::Arc::new(move |payload| {
+            Box::pin(handler(payload))
+        });
 
         // Create subscriber
         let subscriber = state::ISubscriber::new(action_id.to_string(), handler_arc);
@@ -138,7 +138,7 @@ impl Cyre {
         Ok(())
     }
 
-    /// Call an action with payload
+    /// Call an action with payload - REDESIGNED FLOW
     pub async fn call(&self, action_id: &str, payload: ActionPayload) -> CyreResponse {
         if !self.is_initialized {
             return CyreResponse {
@@ -153,9 +153,9 @@ impl Cyre {
 
         let start_time = current_timestamp();
 
-        // Check if action exists
-        let action_config = match state::io::get(action_id) {
-            Some(config) => config,
+        // Step 1: Get action from context/state
+        let mut action = match state::io::get(action_id) {
+            Some(action) => action,
             None => {
                 return CyreResponse {
                     ok: false,
@@ -168,7 +168,7 @@ impl Cyre {
             }
         };
 
-        // Get handler
+        // Step 2: Get handler from context/state
         let handler = match state::subscribers::get(action_id) {
             Some(subscriber) => subscriber,
             None => {
@@ -183,9 +183,9 @@ impl Cyre {
             }
         };
 
-        // Execute pipeline
+        // Step 3: Execute pipeline with action and payload
         let pipeline_result = match
-            crate::pipeline::execute_pipeline(action_id, payload.clone()).await
+            crate::pipeline::execute_pipeline(&mut action, payload.clone()).await
         {
             Ok(result) => result,
             Err(e) => {
@@ -200,7 +200,7 @@ impl Cyre {
             }
         };
 
-        // Handle pipeline result
+        // Step 4: Handle pipeline result
         let processed_payload = match pipeline_result {
             crate::pipeline::PipelineResult::Continue(payload) => payload,
             crate::pipeline::PipelineResult::Block(reason) => {
@@ -210,7 +210,7 @@ impl Cyre {
                     message: format!("Pipeline blocked: {}", reason),
                     error: None,
                     timestamp: current_timestamp(),
-                    metadata: None,
+                    metadata: Some(json!({"blocked": true, "reason": reason})),
                 };
             }
             crate::pipeline::PipelineResult::Schedule => {
@@ -220,19 +220,23 @@ impl Cyre {
                     message: "Action scheduled for execution".to_string(),
                     error: None,
                     timestamp: current_timestamp(),
-                    metadata: None,
+                    metadata: Some(json!({"scheduled": true})),
                 };
             }
         };
 
-        // Execute handler with processed payload
+        // Step 5: Update action state after pipeline execution
+        // This is important for throttle timing, debounce state, etc.
+        let _ = state::io::set(action_id.to_string(), action);
+
+        // Step 6: Execute handler with processed payload
         let response = (handler.handler)(processed_payload.clone()).await;
         let execution_time = current_timestamp() - start_time;
 
-        // Record metrics
+        // Step 7: Record metrics
         let _ = metrics_state::response(response.ok, execution_time);
 
-        // Add to timeline
+        // Step 8: Add to timeline
         let timeline_entry = state::TimelineEntry {
             id: format!("{}_{}", action_id, current_timestamp()),
             action_id: action_id.to_string(),
@@ -265,8 +269,7 @@ impl Cyre {
         let action_removed = state::io::forget(action_id);
         let handler_removed = state::subscribers::forget(action_id);
 
-        // Remove compiled pipeline
-        crate::pipeline::remove_compiled_pipeline(action_id);
+        // No need to remove compiled pipeline separately - it's stored in the action
 
         if action_removed || handler_removed {
             sensor::info("cyre", &format!("Action '{}' and its handler removed", action_id), false);
@@ -295,8 +298,7 @@ impl Cyre {
         state::timeline::clear();
         state::stores::clear();
 
-        // Clear pipeline cache
-        crate::pipeline::clear_pipeline_cache();
+        // No separate pipeline cache to clear
 
         // Reset metrics
         metrics_state::reset();
@@ -367,7 +369,7 @@ impl Cyre {
         }
     }
 
-    /// Get metrics summary - renamed for better API
+    /// Get metrics summary
     pub fn metrics(&self) -> Result<metrics_state::HealthSummary, String> {
         if !self.is_initialized {
             return Err(Messages::CYRE_NOT_INITIALIZED.to_string());
@@ -376,7 +378,7 @@ impl Cyre {
         Ok(metrics_state::get_summary())
     }
 
-    /// Get store summary - renamed for better API
+    /// Get store summary
     pub fn store_status(&self) -> Result<metrics_state::StoreSummary, String> {
         if !self.is_initialized {
             return Err(Messages::CYRE_NOT_INITIALIZED.to_string());
@@ -400,7 +402,7 @@ impl Cyre {
         crate::pipeline::list_compiled_pipelines()
     }
 
-    /// Get comprehensive performance metrics (replacement for get_performance_metrics)
+    /// Get comprehensive performance metrics
     pub fn get_performance_metrics(&self) -> serde_json::Value {
         let metrics_state = metrics_state::status();
         let pipeline_stats = self.pipeline_stats();
@@ -412,7 +414,7 @@ impl Cyre {
         let total_handlers = state::subscribers::size();
         let timeline_entries = state::timeline::size();
 
-        // Estimate fast path vs pipeline hits based on pipeline stats
+        // Get fast path vs pipeline statistics from new system
         let fast_path_channels = pipeline_stats.zero_overhead_count;
         let pipeline_channels = pipeline_stats.protected_count;
         let fast_path_ratio = if total_actions > 0 {
@@ -457,7 +459,9 @@ impl Cyre {
                 "pipeline_channels": pipeline_channels,
                 "optimization_ratio": pipeline_stats.optimization_ratio(),
                 "total_pipelines": pipeline_stats.total_pipelines,
-                "cache_size": pipeline_stats.cache_size
+                "cache_size": pipeline_stats.cache_size,
+                "uses_action_state": true, // New pipeline system uses action state
+                "no_separate_cache": true  // No separate executor cache
             },
             "breathing": breathing_info.map(|info| json!({
                 "pattern": info.pattern,
@@ -470,7 +474,8 @@ impl Cyre {
                 "uptime_ms": current_timestamp() - metrics_state.last_update,
                 "memory_safe": true,
                 "zero_gc_pauses": true,
-                "async_capable": true
+                "async_capable": true,
+                "follows_typescript_pattern": true // Follows original TypeScript logic
             },
             "timekeeper_executions": 0, // Would need TimeKeeper integration
             "active_channels": total_actions,

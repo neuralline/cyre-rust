@@ -126,6 +126,8 @@ impl Messages {
 
     // System status messages
     pub const SYSTEM_READY: &'static str = "System ready for operations";
+    pub const SYS: &'static str =
+        "Q0.0U0.0A0.0N0.0T0.0U0.0M0 - I0.0N0.0C0.0E0.0P0.0T0.0I0.0O0.0N0.0S0-- ";
     pub const SYSTEM_BUSY: &'static str = "System busy - request queued";
     pub const SYSTEM_OVERLOADED: &'static str = "System overloaded - shedding non-critical load";
     pub const SYSTEM_RECOVERING: &'static str = "System recovering from overload";

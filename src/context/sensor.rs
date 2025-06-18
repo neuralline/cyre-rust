@@ -120,7 +120,7 @@ impl LogLevel {
 /// - Only error and critical log by default
 /// - Others need manual enable
 /// - Uses your exact color theme
-/// - Format: [timestamp] LEVEL: message
+/// - Format: [timestamp] LEVEL: action_id - message
 pub struct Sensor;
 
 impl Sensor {
@@ -209,7 +209,8 @@ impl Sensor {
     // PRIVATE HELPER METHODS
     //=========================================================================
 
-    /// Log to terminal with your exact format: [timestamp] LEVEL: message
+    /// Log to terminal with your exact format: [timestamp] LEVEL: action_id - message
+    /// ENTIRE LINE gets the color/background treatment
     fn log_to_terminal(
         action_id: &str,
         level: LogLevel,
@@ -222,23 +223,21 @@ impl Sensor {
         let additional_style = level.additional_style();
 
         // Build the log line: [timestamp] LEVEL: action_id - message
+        // ENTIRE line gets color/background treatment
         let mut log_line = String::new();
 
-        // [timestamp]
-        log_line.push_str(&format!("[{}] ", timestamp));
+        // Start with color/background for ENTIRE line
+        log_line.push_str(&format!("{}{}", color_style, additional_style));
 
-        // LEVEL: (with colors)
-        log_line.push_str(&format!("{}{}{}: ", color_style, additional_style, level));
+        // [timestamp] LEVEL: action_id - message (all colored)
+        log_line.push_str(&format!("[{}] {}: {} - {}", timestamp, level, action_id, message));
 
-        // action_id - message
-        log_line.push_str(&format!("{} - {}", action_id, message));
-
-        // Location if provided
+        // Location if provided (still colored)
         if let Some(loc) = location {
             log_line.push_str(&format!(" @ {}", loc));
         }
 
-        // Reset colors
+        // End with color reset
         log_line.push_str(Colors::RESET);
 
         println!("{}", log_line);
@@ -251,20 +250,15 @@ impl Sensor {
                 }
             }
         }
-
-        // Add extra emphasis for critical
-        if level == LogLevel::CRITICAL {
-            println!(
-                "{}{}🚨 CRITICAL EVENT - IMMEDIATE ATTENTION REQUIRED 🚨{}",
-                Colors::BG_RED,
-                Colors::WHITE_BRIGHT,
-                Colors::RESET
-            );
-        }
     }
 
-    /// Format timestamp to ISO format like your example
+    /// Format timestamp - multiple styles available
     fn format_timestamp() -> String {
+        Self::format_timestamp_unix_z() // Default style
+    }
+
+    /// Unix timestamp with milliseconds and Z: 1750224675.155Z
+    fn format_timestamp_unix_z() -> String {
         use std::time::{ SystemTime, UNIX_EPOCH };
 
         let timestamp = SystemTime::now()
@@ -272,19 +266,62 @@ impl Sensor {
             .unwrap_or_default()
             .as_millis();
 
-        // Convert to ISO-like format (simplified)
-        // For now, just return timestamp - you can enhance this to proper ISO format
         let secs = timestamp / 1000;
         let millis = timestamp % 1000;
-
-        // This is a simplified version - you might want to use chrono crate for proper ISO format
         format!("{}.{:03}Z", secs, millis)
     }
 
-    /// Get current timestamp
-    fn current_timestamp() -> u64 {
+    /// ISO 8601 format: 2025-06-18T14:30:45.123Z
+    #[allow(dead_code)]
+    fn format_timestamp_iso() -> String {
         use std::time::{ SystemTime, UNIX_EPOCH };
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+
+        // Simple ISO format (would need chrono crate for full ISO)
+        format!("{}T00:00:00.000Z", timestamp)
+    }
+
+    /// Human readable: 14:30:45.123
+    #[allow(dead_code)]
+    fn format_timestamp_time() -> String {
+        use std::time::{ SystemTime, UNIX_EPOCH };
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
+        let total_secs = timestamp / 1000;
+        let millis = timestamp % 1000;
+        let hours = (total_secs / 3600) % 24;
+        let minutes = (total_secs / 60) % 60;
+        let seconds = total_secs % 60;
+
+        format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+    }
+
+    /// Compact milliseconds: 1750224675155
+    #[allow(dead_code)]
+    fn format_timestamp_millis() -> String {
+        use std::time::{ SystemTime, UNIX_EPOCH };
+
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().to_string()
+    }
+
+    /// Short format: 675.155
+    #[allow(dead_code)]
+    fn format_timestamp_short() -> String {
+        use std::time::{ SystemTime, UNIX_EPOCH };
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
+        let secs = (timestamp / 1000) % 1000; // Last 3 digits of seconds
+        let millis = timestamp % 1000;
+        format!("{}.{:03}", secs, millis)
     }
 }
 
@@ -382,6 +419,17 @@ mod tests {
         assert_eq!(LogLevel::ERROR.color_style(), Colors::RED_BRIGHT);
     }
 
+    #[test]
+    fn test_timestamp_format() {
+        let timestamp = Sensor::format_timestamp();
+        // Should match pattern: digits.digits Z
+        assert!(timestamp.ends_with('Z'));
+        assert!(timestamp.contains('.'));
+        let parts: Vec<&str> = timestamp.trim_end_matches('Z').split('.').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1].len(), 3); // 3 digit milliseconds
+    }
+
     #[tokio::test]
     async fn test_sensor_methods() {
         // These won't actually log unless force_log is true or they're error/critical
@@ -394,9 +442,9 @@ mod tests {
         error("test", "Error message", None::<&str>, None);
         critical("test", "Critical message", Some("test_location"), None);
 
-        // Force logging
+        // Force logging - these will show with colors
         success("test", "Forced success", true);
-        sys("test", "System message", true);
+        sys("breathing", "Quantum Breathing System starting", true);
     }
 }
 

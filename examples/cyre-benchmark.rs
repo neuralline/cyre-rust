@@ -1,4 +1,4 @@
-// examples/rust-cyre-benchmark.rs
+// examples/cyre-benchmark.rs
 // RUST REDEMPTION ARC - Let's show TypeScript who's boss!
 
 use cyre_rust::prelude::*;
