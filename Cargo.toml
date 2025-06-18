@@ -22,6 +22,9 @@ tokio = { version = "1.40", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Async trait support
+async-trait = "0.1"
+
 # HIGH-PERFORMANCE DATA STRUCTURES (FIX for RwLock issues)
 dashmap = "6.1"           # Lock-free concurrent HashMap
 smallvec = "1.13"         # Stack-allocated vectors
@@ -84,9 +87,6 @@ name = "cyre_rust"
 path = "src/main.rs"
 
 # PERFORMANCE TEST EXAMPLES
-
-
 [[example]]
 name = "benchmark"
 path = "examples/cyre-benchmark.rs"
-

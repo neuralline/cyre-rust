@@ -11,7 +11,7 @@ use crate::context::state::{ io, subscribers, ISubscriber };
 use crate::context::sensor;
 use crate::utils::current_timestamp;
 use std::sync::Arc;
-use serde_json::{ json, Value as JsonValue };
+use serde_json::{ Value as JsonValue };
 
 //=============================================================================
 // CHANNEL INFORMATION
@@ -271,7 +271,7 @@ mod tests {
         Arc::new(|_payload| {
             Box::pin(async move { CyreResponse {
                     ok: true,
-                    payload: json!({}),
+                    payload: serde_json::json!({}),
                     message: "Mock response".to_string(),
                     error: None,
                     timestamp: current_timestamp(),
@@ -319,7 +319,7 @@ mod tests {
         let result = channel(config, |_payload| {
             Box::pin(async move { CyreResponse {
                     ok: true,
-                    payload: json!({}),
+                    payload: serde_json::json!({}),
                     message: "Test response".to_string(),
                     error: None,
                     timestamp: current_timestamp(),

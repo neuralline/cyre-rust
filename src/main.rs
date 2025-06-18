@@ -245,11 +245,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 Total actions: {}", status.payload["stores"]["actions"]);
     println!("🔧 Total handlers: {}", status.payload["stores"]["handlers"]);
 
-    let pipeline_stats = cyre.pipeline_stats();
-    println!("⚡ Zero overhead pipelines: {}", pipeline_stats.zero_overhead_count);
-    println!("🛡️  Protected pipelines: {}", pipeline_stats.protected_count);
-    println!("📈 Optimization ratio: {:.1}%", pipeline_stats.optimization_ratio());
-
     println!("\n🎉 CYRE RUST DEMO COMPLETED!");
     println!("============================");
     println!("✅ All systems operational");
