@@ -88,5 +88,5 @@ path = "src/main.rs"
 
 # PERFORMANCE TEST EXAMPLES
 [[example]]
-name = "benchmark"
+name = "bench"
 path = "examples/cyre-benchmark.rs"

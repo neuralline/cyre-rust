@@ -2,6 +2,7 @@
 // Pipeline execution orchestration - coordinates operator flow
 // File location: src/schema/executor.rs
 
+use crate::schema::Operator;
 use crate::types::{ IO, ActionPayload, CyreResponse };
 use crate::context::sensor;
 use crate::utils::current_timestamp;
@@ -60,7 +61,7 @@ pub async fn execute_pipeline(
   }
 
   // Create pipeline from compiled operator names
-  let operators = build_operators_from_pipeline(action)?;
+  let operators = build_operators_from_pipeline(action);
 
   // Execute pipeline: process each operator in sequence
   let mut current_payload = payload;
@@ -93,111 +94,12 @@ pub async fn execute_pipeline(
 
 /// Build operator instances from compiled pipeline names
 /// RESPONSIBILITY: Only operator instantiation - execution logic is in operators.rs
-fn build_operators_from_pipeline(
-  action: &IO
-) -> Result<Vec<crate::schema::operators::Operator>, String> {
-  use crate::schema::operators::*;
-  use crate::types::RequiredType;
-
-  let mut operators = Vec::new();
-
-  for operator_name in &action._pipeline {
-    let operator = match operator_name.as_str() {
-      "block" => { Operator::Block(BlockOperator::new()) }
-      "throttle" => {
-        if let Some(ms) = action.throttle {
-          Operator::Throttle(ThrottleOperator::new(ms))
-        } else {
-          return Err("Throttle operator without throttle configuration".to_string());
-        }
-      }
-      "debounce" => {
-        if let Some(ms) = action.debounce {
-          Operator::Debounce(DebounceOperator::new(ms))
-        } else {
-          return Err("Debounce operator without debounce configuration".to_string());
-        }
-      }
-      "required" => {
-        // Convert RequiredType to boolean for RequiredOperator
-        match &action.required {
-          Some(RequiredType::Basic(true)) | Some(RequiredType::NonEmpty) => {
-            Operator::Required(RequiredOperator::new())
-          }
-          _ => {
-            return Err("Required operator without valid required configuration".to_string());
-          }
-        }
-      }
-      "schema" => {
-        if let Some(ref schema_name) = action.schema {
-          Operator::Schema(SchemaOperator::new(schema_name))
-        } else {
-          return Err("Schema operator without schema configuration".to_string());
-        }
-      }
-      "condition" => {
-        if let Some(ref condition_name) = action.condition {
-          Operator::Condition(ConditionOperator::new(condition_name))
-        } else {
-          return Err("Condition operator without condition configuration".to_string());
-        }
-      }
-      "selector" => {
-        if let Some(ref selector_name) = action.selector {
-          Operator::Selector(SelectorOperator::new(selector_name))
-        } else {
-          return Err("Selector operator without selector configuration".to_string());
-        }
-      }
-      "transform" => {
-        if let Some(ref transform_name) = action.transform {
-          Operator::Transform(TransformOperator::new(transform_name))
-        } else {
-          return Err("Transform operator without transform configuration".to_string());
-        }
-      }
-      "detect_changes" => {
-        if action.detect_changes {
-          Operator::DetectChanges(DetectChangesOperator::new())
-        } else {
-          continue; // Skip if not enabled
-        }
-      }
-      "schedule" => {
-        // Extract scheduling configuration for ScheduleOperator
-        let delay = action.delay;
-        let interval = action.interval;
-        let repeat = match &action.repeat {
-          Some(val) => {
-            if val.is_number() {
-              val.as_u64().map(|n| n as u32)
-            } else if val.is_boolean() {
-              if val.as_bool().unwrap() {
-                Some(0u32) // true = infinite
-              } else {
-                Some(1u32) // false = once
-              }
-            } else {
-              None
-            }
-          }
-          None => None,
-        };
-
-        Operator::Schedule(ScheduleOperator::new(delay, interval, repeat))
-      }
-      _ => {
-        return Err(format!("Unknown operator in pipeline: {}", operator_name));
-      }
-    };
-
-    operators.push(operator);
-  }
-
-  Ok(operators)
+fn build_operators_from_pipeline(action: &IO) -> Vec<Operator> {
+  action._pipeline
+    .iter()
+    .filter_map(|name| Operator::from_name(name, action))
+    .collect()
 }
-
 //=============================================================================
 // CONVENIENCE FUNCTIONS FOR EXTERNAL INTEGRATION
 //=============================================================================
