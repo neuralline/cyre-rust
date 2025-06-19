@@ -335,15 +335,15 @@ pub fn log(
     level: LogLevel,
     message: impl AsRef<str>,
     location: Option<impl AsRef<str>>,
-    force_log: bool,
+    log: bool,
     metadata: Option<JsonValue>
 ) {
-    Sensor::log(action_id, level, message, location, force_log, metadata);
+    Sensor::log(action_id, level, message, location, log, metadata);
 }
 
 /// Success logging (manual enable required)
-pub fn success(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-    Sensor::success(action_id, message, force_log);
+pub fn success(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
+    Sensor::success(action_id, message, log);
 }
 
 /// Error logging (auto-enabled)
@@ -357,18 +357,18 @@ pub fn error(
 }
 
 /// Warning logging (manual enable required)
-pub fn warn(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-    Sensor::warn(action_id, message, force_log);
+pub fn warn(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
+    Sensor::warn(action_id, message, log);
 }
 
 /// Info logging (manual enable required)
-pub fn info(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-    Sensor::info(action_id, message, force_log);
+pub fn info(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
+    Sensor::info(action_id, message, log);
 }
 
 /// Debug logging (manual enable required)
-pub fn debug(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-    Sensor::debug(action_id, message, force_log);
+pub fn debug(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
+    Sensor::debug(action_id, message, log);
 }
 
 /// Critical logging (auto-enabled)
@@ -382,8 +382,8 @@ pub fn critical(
 }
 
 /// System logging (manual enable required)
-pub fn sys(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-    Sensor::sys(action_id, message, force_log);
+pub fn sys(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
+    Sensor::sys(action_id, message, log);
 }
 
 //=============================================================================

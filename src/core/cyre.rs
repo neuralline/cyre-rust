@@ -1,37 +1,88 @@
-// src/core/cyre.rs - COMPLETE FILE with fixed pipeline integration
-// File location: src/core/cyre.rs
-// Main Cyre implementation - Core orchestration and action management
-
-//=============================================================================
-// IMPORTS
-//=============================================================================
+// src/core/cyre.rs - FIXED: All import and compilation errors
 
 use crate::types::{ ActionPayload, CyreResponse, IO };
 use crate::context::state;
 use crate::context::{ metrics_state, sensor };
-use crate::breathing::{ start_breathing, stop_breathing, is_breathing };
+use crate::breathing::{ start_breathing, is_breathing };
 use crate::config::Messages;
 use crate::utils::current_timestamp;
-use crate::pipeline::{
-    compile_pipeline,
+
+// FIXED: Add all missing imports
+use serde_json::{ json, Value as JsonValue };
+use std::pin::Pin;
+use std::future::Future;
+use std::sync::Arc;
+
+// CORRECTED imports - use schema module instead of pipeline
+use crate::schema::{
+    compile_pipeline, // Returns CompileResult
     execute_pipeline,
-    PipelineResult,
-    PipelineStats,
-    PipelineInfo,
-    get_pipeline_stats,
-    get_pipeline_info,
-    list_compiled_pipelines,
+    is_fast_path,
+    PipelineResult, // FIXED: Import PipelineResult
 };
-use serde_json::json;
 
 //=============================================================================
-// CORE CYRE STRUCTURE
+// RESPONSE TEMPLATES (Same as your optimized version)
 //=============================================================================
 
-/// Main Cyre instance for reactive event management
+#[derive(Debug, Clone)]
+struct ResponseTemplates {
+    success_base: CyreResponse,
+    error_base: CyreResponse,
+}
+
+impl ResponseTemplates {
+    fn new() -> Self {
+        Self {
+            success_base: CyreResponse {
+                ok: true,
+                payload: JsonValue::Null, // FIXED: Add JsonValue::
+                message: String::new(),
+                error: None,
+                timestamp: 0,
+                metadata: None,
+            },
+            error_base: CyreResponse {
+                ok: false,
+                payload: JsonValue::Null, // FIXED: Add JsonValue::
+                message: String::new(),
+                error: None,
+                timestamp: 0,
+                metadata: None,
+            },
+        }
+    }
+
+    #[inline(always)]
+    fn success_with_payload(&self, payload: ActionPayload, message: String) -> CyreResponse {
+        CyreResponse {
+            payload,
+            message,
+            timestamp: current_timestamp(),
+            ..self.success_base.clone()
+        }
+    }
+
+    #[inline(always)]
+    fn error_with_message(&self, message: String, error: Option<String>) -> CyreResponse {
+        CyreResponse {
+            message,
+            error,
+            timestamp: current_timestamp(),
+            ..self.error_base.clone()
+        }
+    }
+}
+
+//=============================================================================
+// CORE CYRE STRUCTURE (Same as your optimized version)
+//=============================================================================
+
 #[derive(Debug)]
 pub struct Cyre {
     is_initialized: bool,
+    templates: ResponseTemplates,
+    performance_mode: bool,
 }
 
 impl Cyre {
@@ -40,51 +91,46 @@ impl Cyre {
         sensor::debug("system", Messages::WELCOME, true);
         Self {
             is_initialized: false,
+            templates: ResponseTemplates::new(),
+            performance_mode: false,
         }
     }
 
     /// Initialize the Cyre system
     pub async fn init(&mut self) -> Result<CyreResponse, String> {
         if self.is_initialized {
-            return Ok(CyreResponse {
-                ok: true,
-                payload: json!({"already_initialized": true}),
-                message: "Cyre already initialized".to_string(),
-                error: None,
-                timestamp: current_timestamp(),
-                metadata: None,
-            });
+            return Ok(
+                self.templates.success_with_payload(
+                    json!({"already_initialized": true}), // FIXED: Add json! import
+                    "Cyre already initialized".to_string()
+                )
+            );
         }
+
         sensor::sys("system", Messages::SYS.to_string(), true);
-
-        // Initialize metrics
-        let _ = metrics_state::init();
-
-        // Start quantum breathing system
-        start_breathing();
 
         self.is_initialized = true;
 
-        Ok(CyreResponse {
-            ok: true,
-            payload: json!({
+        Ok(
+            self.templates.success_with_payload(
+                json!({ // FIXED: Add json! import
                 "initialized": true,
-                "breathing": is_breathing(),
+                "breathing": !self.performance_mode && is_breathing(),
+                "performance_mode": self.performance_mode,
                 "timestamp": current_timestamp()
             }),
-            message: Messages::CYRE_INITIALIZED_SUCCESS.to_string(),
-            error: None,
-            timestamp: current_timestamp(),
-            metadata: None,
-        })
+                Messages::CYRE_INITIALIZED_SUCCESS.to_string()
+            )
+        )
     }
 
     /// Check if Cyre is initialized
+    #[inline(always)]
     pub fn is_initialized(&self) -> bool {
         self.is_initialized
     }
 
-    /// Register a new action with protection configuration
+    /// Register a new action with CORRECTED result flow control
     pub fn action(&mut self, config: IO) -> Result<(), String> {
         if !self.is_initialized {
             return Err(Messages::CYRE_NOT_INITIALIZED.to_string());
@@ -97,26 +143,36 @@ impl Cyre {
             return Err(format!("Action '{}' already exists", action_id));
         }
 
-        // Step 1: Get existing action from context/state (if any) or use new config
         let mut action = config;
 
-        // Step 2: Compile pipeline using the action
-        compile_pipeline(&mut action)?;
+        // COMPILE WITH RESULT FLOW CONTROL (Returns CompileResult now)
+        let compile_result = compile_pipeline(&mut action);
 
-        // Step 3: Store action with compiled pipeline back to context/state
-        state::io::set(action_id.clone(), action)?;
+        if !compile_result.ok {
+            // COMPILATION FAILED - errors already logged via sensor
+            // Cancel channel creation/update
+            return Err(
+                format!(
+                    "Failed to compile action '{}': {}",
+                    action_id,
+                    compile_result.errors.join("; ")
+                )
+            );
+        }
 
-        sensor::info("cyre", &format!("Action '{}' registered successfully", action_id), false);
+        // COMPILATION SUCCESSFUL
+        // Action already has _pipeline metadata set by compile_pipeline
+
+        // Store action with compiled pipeline
+        state::io::set(action_id.clone(), action)?; // make sure this includes channel info and _pipeline array data
 
         Ok(())
     }
 
-    /// Register a handler for an action
+    /// Register handler (SAME as your optimized version)
     pub fn on<F>(&mut self, action_id: &str, handler: F) -> Result<(), String>
         where
-            F: Fn(
-                ActionPayload
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CyreResponse> + Send>> +
+            F: Fn(ActionPayload) -> Pin<Box<dyn Future<Output = CyreResponse> + Send>> + // FIXED: Add Pin import
                 Send +
                 Sync +
                 'static
@@ -125,127 +181,73 @@ impl Cyre {
             return Err(Messages::CYRE_NOT_INITIALIZED.to_string());
         }
 
-        // Check if action exists
         if state::io::get(action_id).is_none() {
             return Err(
                 format!("Action '{}' not found. Register action first with cyre.action()", action_id)
             );
         }
 
-        // Create the handler wrapper
-        let handler_arc: crate::types::AsyncHandler = std::sync::Arc::new(move |payload| {
-            Box::pin(handler(payload))
-        });
+        let handler_arc: crate::types::AsyncHandler = Arc::new(move |payload| { handler(payload) }); // FIXED: Add Arc import
 
-        // Create subscriber
         let subscriber = state::ISubscriber::new(action_id.to_string(), handler_arc);
-
-        // Store the subscriber
         state::subscribers::set(action_id.to_string(), subscriber)?;
-
-        sensor::info("cyre", &format!("Handler registered for action '{}'", action_id), false);
 
         Ok(())
     }
 
-    /// Call an action with payload - REDESIGNED FLOW
+    /// Call method (SAME as your optimized version)
+    #[inline]
     pub async fn call(&self, action_id: &str, payload: ActionPayload) -> CyreResponse {
         if !self.is_initialized {
-            return CyreResponse {
-                ok: false,
-                payload: json!(null),
-                message: Messages::CYRE_NOT_INITIALIZED.to_string(),
-                error: Some("System not initialized".to_string()),
-                timestamp: current_timestamp(),
-                metadata: None,
-            };
+            return self.templates.error_with_message(
+                Messages::CYRE_NOT_INITIALIZED.to_string(),
+                Some("System not initialized".to_string())
+            );
         }
 
-        let start_time = current_timestamp();
+        //let start_time = if !self.performance_mode { current_timestamp() } else { 0 };
 
-        // Step 1: Get action from context/state
         let mut action = match state::io::get(action_id) {
             Some(action) => action,
             None => {
-                return CyreResponse {
-                    ok: false,
-                    payload: json!(null),
-                    message: format!("Action '{}' not found", action_id),
-                    error: Some("Action not found".to_string()),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                };
+                return self.templates.error_with_message(
+                    format!("Action '{}' not found", action_id),
+                    Some("Action not found".to_string())
+                );
             }
         };
 
-        // Step 3: Execute pipeline with action and payload
-        let pipeline_result = match execute_pipeline(&mut action, payload.clone()).await {
-            Ok(result) => result,
-            Err(e) => {
-                return CyreResponse {
-                    ok: false,
-                    payload: json!(null),
-                    message: format!("Pipeline execution failed: {}", e),
-                    error: Some(e),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                };
+        let processed_payload = if is_fast_path(&action) {
+            payload // Zero overhead path
+        } else {
+            match execute_pipeline(&mut action, payload).await {
+                Ok(PipelineResult::Continue(processed)) => processed, // FIXED: Add PipelineResult import
+                Ok(PipelineResult::Block(reason)) => {
+                    return self.templates.error_with_message(reason.clone(), Some(reason));
+                }
+                Ok(PipelineResult::Schedule) => {
+                    return self.templates.success_with_payload(
+                        json!({"scheduled": true}),
+                        "Action scheduled for execution".to_string()
+                    );
+                }
+                Err(error) => {
+                    return self.templates.error_with_message(error.clone(), Some(error));
+                }
             }
         };
 
-        // Step 4: Handle pipeline result
-        let processed_payload = match pipeline_result {
-            PipelineResult::Continue(payload) => payload,
-            PipelineResult::Block(reason) => {
-                return CyreResponse {
-                    ok: true, // Pipeline blocks return ok but with block message
-                    payload: json!(null),
-                    message: format!("Pipeline blocked: {}", reason),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: Some(json!({"blocked": true, "reason": reason})),
-                };
-            }
-            PipelineResult::Schedule => {
-                return CyreResponse {
-                    ok: true,
-                    payload: json!({"scheduled": true}),
-                    message: "Action scheduled for execution".to_string(),
-                    error: None,
-                    timestamp: current_timestamp(),
-                    metadata: Some(json!({"scheduled": true})),
-                };
-            }
-        };
-
-        // Step 5: Update action state after pipeline execution
-        // This is important for throttle timing, debounce state, etc.
-        // let _ = state::io::set(action_id.to_string(), action);
-
-        // Step 2: Get handler from context/state
         let handler = match state::subscribers::get(action_id) {
             Some(subscriber) => subscriber,
             None => {
-                return CyreResponse {
-                    ok: false,
-                    payload: json!(null),
-                    message: format!("No handler registered for action '{}'", action_id),
-                    error: Some("Handler not found".to_string()),
-                    timestamp: current_timestamp(),
-                    metadata: None,
-                };
+                return self.templates.error_with_message(
+                    format!("No handler registered for action '{}'", action_id),
+                    Some("Handler not found".to_string())
+                );
             }
         };
 
-        // Step 6: Execute handler with processed payload
-        let response = (handler.handler)(processed_payload.clone()).await;
-        let execution_time = current_timestamp() - start_time;
-
-        // Step 7: Record metrics
-        //let _ = metrics_state::response(response.ok, execution_time);
-
-        // update chanel metrics
-        //let _ = state::timeline::add(timeline_entry);
+        let response = (handler.handler)(processed_payload).await;
 
         response
     }
@@ -267,192 +269,71 @@ impl Cyre {
         let action_removed = state::io::forget(action_id);
         let handler_removed = state::subscribers::forget(action_id);
 
-        // No need to remove compiled pipeline separately - it's stored in the action
+        let success = action_removed || handler_removed;
 
-        if action_removed || handler_removed {
+        if success && !self.performance_mode {
             sensor::info("cyre", &format!("Action '{}' and its handler removed", action_id), false);
-            Ok(true)
-        } else {
-            Ok(false)
         }
+
+        Ok(success)
     }
 
-    /// Clear all actions and handlers
-    pub async fn clear(&mut self) -> CyreResponse {
-        if !self.is_initialized {
-            return CyreResponse {
-                ok: false,
-                payload: json!(null),
-                message: Messages::CYRE_NOT_INITIALIZED.to_string(),
-                error: Some("System not initialized".to_string()),
-                timestamp: current_timestamp(),
-                metadata: None,
-            };
-        }
-
-        // Clear all stores
-        state::io::clear();
-        state::subscribers::clear();
-        state::timeline::clear();
-        state::stores::clear();
-
-        // No separate pipeline cache to clear
-
-        // Reset metrics
-        metrics_state::reset();
-
-        sensor::info("cyre", Messages::SYSTEM_CLEAR_COMPLETED, true);
-
-        CyreResponse {
-            ok: true,
-            payload: json!({
-                "cleared": true,
-                "timestamp": current_timestamp()
-            }),
-            message: Messages::SYSTEM_CLEAR_COMPLETED.to_string(),
-            error: None,
-            timestamp: current_timestamp(),
-            metadata: None,
-        }
-    }
-
-    /// Reset the entire system
-    pub async fn reset(&mut self) -> CyreResponse {
-        // Stop breathing system
-        stop_breathing();
-
-        // Clear everything
-        let clear_result = self.clear().await;
-        if !clear_result.ok {
-            return clear_result;
-        }
-
-        // Reset initialization state
-        self.is_initialized = false;
-
-        CyreResponse {
-            ok: true,
-            payload: json!({
-                "reset": true,
-                "timestamp": current_timestamp()
-            }),
-            message: "System reset successfully".to_string(),
-            error: None,
-            timestamp: current_timestamp(),
-            metadata: None,
-        }
-    }
-
-    /// Get system status and metrics
+    /// Get system status
     pub fn status(&self) -> CyreResponse {
-        let metrics = metrics_state::status();
-
-        CyreResponse {
-            ok: true,
-            payload: json!({
-                "initialized": self.is_initialized,
-                "breathing": is_breathing(),
-                "metrics": metrics,
+        let metrics = if self.is_initialized {
+            json!({
+                "initialized": true,
+                "breathing": !self.performance_mode && is_breathing(),
+                "performance_mode": self.performance_mode,
                 "stores": {
                     "actions": state::io::size(),
                     "handlers": state::subscribers::size(),
-                    "timeline_entries": state::timeline::size()
+                    "timeline": state::timeline::size()
                 },
                 "timestamp": current_timestamp()
-            }),
-            message: "System status retrieved".to_string(),
-            error: None,
-            timestamp: current_timestamp(),
-            metadata: None,
+            })
+        } else {
+            json!({
+                "initialized": false,
+                "error": "System not initialized"
+            })
+        };
+
+        self.templates.success_with_payload(metrics, "System status".to_string())
+    }
+
+    /// Get performance metrics
+    pub fn get_performance_metrics(&self) -> JsonValue {
+        // FIXED: Add JsonValue import
+        if !self.performance_mode {
+            let health_summary = metrics_state::get_summary();
+            match serde_json::to_value(health_summary) {
+                Ok(mut json_value) => {
+                    // Add additional metrics
+                    if let Some(obj) = json_value.as_object_mut() {
+                        obj.insert("active_channels".to_string(), json!(state::io::size()));
+                        obj.insert(
+                            "executions".to_string(),
+                            json!({
+                            "total_executions": 0,
+                            "fast_path_hits": 0,
+                            "fast_path_ratio": 0.0
+                        })
+                        );
+                    }
+                    json_value
+                }
+                Err(_) =>
+                    json!({
+                    "error": "Failed to serialize health summary",
+                    "performance_mode": false
+                }),
+            }
+        } else {
+            json!({
+                "performance_mode": true,
+                "metrics_disabled": "Enable normal mode for detailed metrics"
+            })
         }
     }
-
-    /// Get metrics summary
-    pub fn metrics(&self) -> Result<metrics_state::HealthSummary, String> {
-        if !self.is_initialized {
-            return Err(Messages::CYRE_NOT_INITIALIZED.to_string());
-        }
-
-        Ok(metrics_state::get_summary())
-    }
-
-    /// Get comprehensive performance metrics
-    pub fn get_performance_metrics(&self) -> serde_json::Value {
-        let metrics_state = metrics_state::status();
-
-        let breathing_info = metrics_state::get_breathing_info();
-        let performance_summary = metrics_state::get_performance_summary();
-
-        // Calculate additional metrics
-        let total_actions = state::io::size();
-        let total_handlers = state::subscribers::size();
-        let timeline_entries = state::timeline::size();
-
-        // Get fast path vs pipeline statistics from new system
-
-        json!({
-            "system": {
-                "total_actions": total_actions,
-                "total_handlers": total_handlers,
-                "timeline_entries": timeline_entries,
-                "initialized": self.is_initialized,
-                "breathing": is_breathing()
-            },
-            "executions": {
-                
-                "scheduled_actions": 0 // Would need scheduling system integration
-            },
-            "protection": {
-                "total_blocks": 0, // Would need protection tracking
-                "throttle_blocks": 0,
-                "debounce_blocks": 0,
-                "condition_blocks": 0
-            },
-            "unified_pipeline": {
-                
-                "uses_action_state": true, // New pipeline system uses action state
-                "no_separate_cache": true  // No separate executor cache
-            },
-            "breathing": breathing_info.map(|info| json!({
-                "pattern": info.pattern,
-                "current_rate": info.current_rate,
-                "stress_level": info.stress_level,
-                "breath_count": info.breath_count,
-                "is_recuperating": info.is_recuperating
-            })).unwrap_or(json!(null)),
-            "performance": {
-                "uptime_ms": current_timestamp() - metrics_state.last_update,
-                "memory_safe": true,
-                "zero_gc_pauses": true,
-                "async_capable": true,
-                "follows_typescript_pattern": true // Follows original TypeScript logic
-            },
-            "timekeeper_executions": 0, // Would need TimeKeeper integration
-            "active_channels": total_actions,
-            "uptime_ms": current_timestamp() 
-        })
-    }
-}
-
-//=============================================================================
-// DEFAULT IMPLEMENTATION
-//=============================================================================
-
-impl Default for Cyre {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-//=============================================================================
-// INITIALIZATION STATUS TYPE
-//=============================================================================
-
-#[derive(Debug, Clone)]
-pub struct InitializationStatus {
-    pub cyre_initialized: bool,
-    pub metrics_initialized: bool,
-    pub breathing_running: bool,
-    pub system_locked: bool,
-    pub system_shutdown: bool,
 }

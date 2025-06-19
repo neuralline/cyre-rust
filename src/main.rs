@@ -184,10 +184,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get system metrics
     let metrics = cyre.get_performance_metrics();
     println!("\n📈 System Metrics:");
-    println!("   Total executions: {}", metrics["executions"]["total_executions"]);
-    println!("   Fast path hits: {}", metrics["executions"]["fast_path_hits"]);
-    println!("   Fast path ratio: {:.1}%", metrics["executions"]["fast_path_ratio"]);
-    println!("   Active channels: {}", metrics["active_channels"]);
+    if let Some(executions) = metrics.get("executions") {
+        println!(
+            "   Total executions: {}",
+            executions.get("total_executions").unwrap_or(&json!(0))
+        );
+        println!("   Fast path hits: {}", executions.get("fast_path_hits").unwrap_or(&json!(0)));
+        println!(
+            "   Fast path ratio: {:.1}%",
+            executions.get("fast_path_ratio").unwrap_or(&json!(0.0))
+        );
+    }
+    println!("   Active channels: {}", metrics.get("active_channels").unwrap_or(&json!(0)));
 
     // =================================================================
     // Demo 6: Error Handling
@@ -241,9 +249,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let status = cyre.status();
     println!("🟢 System initialized: {}", status.payload["initialized"]);
-    println!("💨 Breathing system: {}", status.payload["breathing"]);
-    println!("📋 Total actions: {}", status.payload["stores"]["actions"]);
-    println!("🔧 Total handlers: {}", status.payload["stores"]["handlers"]);
+    if let Some(breathing) = status.payload.get("breathing") {
+        println!("💨 Breathing system: {}", breathing);
+    }
+    if let Some(stores) = status.payload.get("stores") {
+        println!("📋 Total actions: {}", stores.get("actions").unwrap_or(&json!(0)));
+        println!("🔧 Total handlers: {}", stores.get("handlers").unwrap_or(&json!(0)));
+    }
 
     println!("\n🎉 CYRE RUST DEMO COMPLETED!");
     println!("============================");

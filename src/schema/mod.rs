@@ -1,29 +1,22 @@
-// src/lib.rs - MINIMAL VERSION
-#![allow(dead_code)]
+// src/schema/mod.rs - Complete schema module with all submodules
 
-pub mod core;
-pub mod types;
-pub mod context;
-pub mod breathing;
-pub mod config;
-pub mod utils;
-pub mod schema;
-pub mod timekeeper;
+// Submodules
+pub mod data_definitions;
+pub mod operators;
+pub mod compile_execute;
 
-pub mod prelude {
-    pub use crate::core::Cyre;
-    pub use crate::types::*;
-    pub use crate::utils::current_timestamp;
-    pub use serde_json::{ json, Value };
-}
-
-pub use schema::{
+// Re-export data validation functionality
+pub use data_definitions::{
     validate_field,
     DataDefResult,
     describe_value,
     PROTECTION_TALENTS,
     PROCESSING_TALENTS,
     SCHEDULING_TALENTS,
+};
+
+// Re-export compilation and execution functionality
+pub use compile_execute::{
     compile_pipeline,
     execute_pipeline,
     PipelineResult,
@@ -31,6 +24,10 @@ pub use schema::{
     estimate_operator_count,
     estimated_performance,
     ConfigFields,
+};
+
+// Re-export operators functionality
+pub use operators::{
     PipelineStats,
     PipelineInfo,
     get_pipeline_stats,
@@ -39,6 +36,7 @@ pub use schema::{
     Pipeline,
     OperatorResult,
     ScheduleConfig,
+    // Operator implementations
     Operator,
     BlockOperator,
     ThrottleOperator,
@@ -50,8 +48,3 @@ pub use schema::{
     SelectorOperator,
     ScheduleOperator,
 };
-// src/pipeline/compile_execute.rs - FIXED VERSION
-use crate::types::{ IO, RequiredType, ActionPayload };
-
-use crate::context::sensor;
-use serde_json::Value as JsonValue;

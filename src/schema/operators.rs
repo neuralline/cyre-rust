@@ -1,4 +1,4 @@
-// src/pipeline/operators.rs
+// src/schema/operators.rs
 // File location: src/pipeline/operators.rs
 // Fixed pipeline operators using enum instead of trait objects
 
@@ -368,122 +368,122 @@ pub enum PipelineResult {
 // PIPELINE COMPILER - Creates operator array (ENUM VARIANT!)
 //=============================================================================
 
-/// Compile IO configuration into array of operators
-pub fn compile_pipeline(config: &mut IO) -> Result<(), String> {
-    let mut operators: Vec<Operator> = Vec::new();
+// /// Compile IO configuration into array of operators
+// pub fn compile_pipeline(config: &mut IO) -> Result<(), String> {
+//     let mut operators: Vec<Operator> = Vec::new();
 
-    // 1. PROTECTION TALENTS (First - Block Early)
-    if config.block {
-        operators.push(Operator::Block(BlockOperator::new()));
-    }
+//     // 1. PROTECTION TALENTS (First - Block Early)
+//     if config.block {
+//         operators.push(Operator::Block(BlockOperator::new()));
+//     }
 
-    if let Some(throttle_ms) = config.throttle {
-        operators.push(Operator::Throttle(ThrottleOperator::new(throttle_ms)));
-    }
+//     if let Some(throttle_ms) = config.throttle {
+//         operators.push(Operator::Throttle(ThrottleOperator::new(throttle_ms)));
+//     }
 
-    if let Some(debounce_ms) = config.debounce {
-        operators.push(Operator::Debounce(DebounceOperator::new(debounce_ms)));
-    }
+//     if let Some(debounce_ms) = config.debounce {
+//         operators.push(Operator::Debounce(DebounceOperator::new(debounce_ms)));
+//     }
 
-    // 2. VALIDATION TALENTS
-    // Fix: Handle RequiredType properly
-    if let Some(required) = &config.required {
-        match required {
-            RequiredType::Basic(true) | RequiredType::NonEmpty => {
-                operators.push(Operator::Required(RequiredOperator::new()));
-            }
-            RequiredType::Basic(false) => {
-                // Not required - skip
-            }
-        }
-    }
+//     // 2. VALIDATION TALENTS
+//     // Fix: Handle RequiredType properly
+//     if let Some(required) = &config.required {
+//         match required {
+//             RequiredType::Basic(true) | RequiredType::NonEmpty => {
+//                 operators.push(Operator::Required(RequiredOperator::new()));
+//             }
+//             RequiredType::Basic(false) => {
+//                 // Not required - skip
+//             }
+//         }
+//     }
 
-    if let Some(schema) = &config.schema {
-        operators.push(Operator::Schema(SchemaOperator::new(schema)));
-    }
+//     if let Some(schema) = &config.schema {
+//         operators.push(Operator::Schema(SchemaOperator::new(schema)));
+//     }
 
-    // 3. PROCESSING TALENTS
-    if let Some(condition) = &config.condition {
-        operators.push(Operator::Condition(ConditionOperator::new(condition)));
-    }
+//     // 3. PROCESSING TALENTS
+//     if let Some(condition) = &config.condition {
+//         operators.push(Operator::Condition(ConditionOperator::new(condition)));
+//     }
 
-    if let Some(selector) = &config.selector {
-        operators.push(Operator::Selector(SelectorOperator::new(selector)));
-    }
+//     if let Some(selector) = &config.selector {
+//         operators.push(Operator::Selector(SelectorOperator::new(selector)));
+//     }
 
-    if let Some(transform) = &config.transform {
-        operators.push(Operator::Transform(TransformOperator::new(transform)));
-    }
+//     if let Some(transform) = &config.transform {
+//         operators.push(Operator::Transform(TransformOperator::new(transform)));
+//     }
 
-    // 4. SCHEDULE TALENTS (Last - Routes to TimeKeeper)
-    if config.delay.is_some() || config.interval.is_some() || config.repeat.is_some() {
-        // Fix: Handle RepeatType properly
-        let repeat_count = match &config.repeat {
-            Some(crate::types::RepeatType::Count(count)) => Some(*count),
-            Some(crate::types::RepeatType::Infinite) => Some(0), // 0 = infinite
-            None => None,
-        };
+//     // 4. SCHEDULE TALENTS (Last - Routes to TimeKeeper)
+//     if config.delay.is_some() || config.interval.is_some() || config.repeat.is_some() {
+//         // Fix: Handle RepeatType properly
+//         let repeat_count = match &config.repeat {
+//             Some(crate::types::RepeatType::Count(count)) => Some(*count),
+//             Some(crate::types::RepeatType::Infinite) => Some(0), // 0 = infinite
+//             None => None,
+//         };
 
-        operators.push(
-            Operator::Schedule(ScheduleOperator::new(config.delay, config.interval, repeat_count))
-        );
-    }
+//         operators.push(
+//             Operator::Schedule(ScheduleOperator::new(config.delay, config.interval, repeat_count))
+//         );
+//     }
 
-    // Store compiled pipeline in the action
-    config._pipeline = operators
-        .iter()
-        .map(|op| op.name().to_string())
-        .collect();
-    config._has_fast_path = operators.is_empty();
+//     // Store compiled pipeline in the action
+//     config._pipeline = operators
+//         .iter()
+//         .map(|op| op.name().to_string())
+//         .collect();
+//     config._has_fast_path = operators.is_empty();
 
-    Ok(())
-}
+//     Ok(())
+// }
 
-/// Execute compiled pipeline - using action's compiled pipeline
-pub async fn execute_pipeline(
-    action: &mut IO,
-    payload: ActionPayload
-) -> Result<PipelineResult, String> {
-    // Check if this action has fast path
-    if action._has_fast_path {
-        return Ok(PipelineResult::Continue(payload)); // Fast path! ⚡
-    }
+// /// Execute compiled pipeline - using action's compiled pipeline
+// pub async fn execute_pipeline(
+//     action: &mut IO,
+//     payload: ActionPayload
+// ) -> Result<PipelineResult, String> {
+//     // Check if this action has fast path
+//     if action._has_fast_path {
+//         return Ok(PipelineResult::Continue(payload)); // Fast path! ⚡
+//     }
 
-    // For now, we need to recompile from config
-    // In a more optimized version, we'd store the compiled operators
-    let mut operators: Vec<Operator> = Vec::new();
+//     // For now, we need to recompile from config
+//     // In a more optimized version, we'd store the compiled operators
+//     let mut operators: Vec<Operator> = Vec::new();
 
-    // Rebuild operators from config (simplified for now)
-    if action.block {
-        operators.push(Operator::Block(BlockOperator::new()));
-    }
+//     // Rebuild operators from config (simplified for now)
+//     if action.block {
+//         operators.push(Operator::Block(BlockOperator::new()));
+//     }
 
-    if let Some(throttle_ms) = action.throttle {
-        operators.push(Operator::Throttle(ThrottleOperator::new(throttle_ms)));
-    }
+//     if let Some(throttle_ms) = action.throttle {
+//         operators.push(Operator::Throttle(ThrottleOperator::new(throttle_ms)));
+//     }
 
-    if let Some(debounce_ms) = action.debounce {
-        operators.push(Operator::Debounce(DebounceOperator::new(debounce_ms)));
-    }
+//     if let Some(debounce_ms) = action.debounce {
+//         operators.push(Operator::Debounce(DebounceOperator::new(debounce_ms)));
+//     }
 
-    if let Some(required) = &action.required {
-        match required {
-            RequiredType::Basic(true) | RequiredType::NonEmpty => {
-                operators.push(Operator::Required(RequiredOperator::new()));
-            }
-            RequiredType::Basic(false) => {
-                // Not required - skip
-            }
-        }
-    }
+//     if let Some(required) = &action.required {
+//         match required {
+//             RequiredType::Basic(true) | RequiredType::NonEmpty => {
+//                 operators.push(Operator::Required(RequiredOperator::new()));
+//             }
+//             RequiredType::Basic(false) => {
+//                 // Not required - skip
+//             }
+//         }
+//     }
 
-    // Execute pipeline
-    let pipeline = Pipeline::new(operators);
-    match pipeline.process(payload).await {
-        Ok(result_payload) => Ok(PipelineResult::Continue(result_payload)),
-        Err(error) => Ok(PipelineResult::Block(error)),
-    }
-}
+//     // Execute pipeline
+//     let pipeline = Pipeline::new(operators);
+//     match pipeline.process(payload).await {
+//         Ok(result_payload) => Ok(PipelineResult::Continue(result_payload)),
+//         Err(error) => Ok(PipelineResult::Block(error)),
+//     }
+// }
 
 //=============================================================================
 // CONVENIENCE FUNCTIONS
