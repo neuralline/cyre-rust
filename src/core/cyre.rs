@@ -3,7 +3,7 @@
 use crate::types::{ ActionPayload, CyreResponse, IO };
 use crate::context::state;
 use crate::context::{ metrics_state, sensor };
-use crate::breathing::{ start_breathing, is_breathing };
+use crate::breathing::is_breathing; // Removed unused start_breathing
 use crate::config::Messages;
 use crate::utils::current_timestamp;
 
@@ -129,7 +129,7 @@ impl Cyre {
   }
 
   /// Register a new action with CORRECTED result flow control
-  pub fn action(&mut self, config: IO) -> Result<(), String> {
+  pub fn action(&mut self, mut config: IO) -> Result<(), String> {
     if !self.is_initialized {
       return Err(Messages::CYRE_NOT_INITIALIZED.to_string());
     }
@@ -141,28 +141,29 @@ impl Cyre {
       return Err(format!("Action '{}' already exists", action_id));
     }
 
-    let mut action = config;
+    // 1. EXTRACT PAYLOAD FIRST (before compilation)
+    let default_payload = config.payload.take(); // Remove from config
 
-    // COMPILE WITH RESULT FLOW CONTROL (Returns CompileResult now)
-    let compile_result = compile_pipeline(&mut action);
+    // 2. COMPILE PIPELINE (modifies config._pipeline)
+    let compile_result = compile_pipeline(&mut config);
 
     if !compile_result.ok {
       // COMPILATION FAILED - errors already logged via sensor
-      // Cancel channel creation/update
       return Err(
         format!("Failed to compile action '{}': {}", action_id, compile_result.errors.join("; "))
       );
     }
 
-    // COMPILATION SUCCESSFUL
-    // Action already has _pipeline metadata set by compile_pipeline
+    // 3. STORE CONFIG (without payload) in io store
+    state::io::set(action_id.clone(), config)?;
 
-    // Store action with compiled pipeline
-    state::io::set(action_id.clone(), action)?; // make sure this includes channel info and _pipeline array data
+    // 4. STORE PAYLOAD (if provided) in payload store
+    if let Some(payload) = default_payload {
+      state::payload::set(action_id.clone(), payload)?;
+    }
 
     Ok(())
   }
-
   /// Register handler (SAME as your optimized version)
   pub fn on<F>(&mut self, action_id: &str, handler: F) -> Result<(), String>
     where
@@ -181,7 +182,7 @@ impl Cyre {
       );
     }
 
-    let handler_arc: crate::types::AsyncHandler = Arc::new(move |payload| { handler(payload) }); // FIXED: Add Arc import
+    let handler_arc: crate::types::AsyncHandler = Arc::new(move |payload| handler(payload)); // FIXED: Add Arc import
 
     let subscriber = state::ISubscriber::new(action_id.to_string(), handler_arc);
     state::subscribers::set(action_id.to_string(), subscriber)?;
@@ -198,8 +199,6 @@ impl Cyre {
         Some("System not initialized".to_string())
       );
     }
-
-    //let start_time = if !self.performance_mode { current_timestamp() } else { 0 };
 
     let mut action = match state::io::get(action_id) {
       Some(action) => action,
@@ -309,10 +308,10 @@ impl Cyre {
             obj.insert(
               "executions".to_string(),
               json!({
-                            "total_executions": 0,
-                            "fast_path_hits": 0,
-                            "fast_path_ratio": 0.0
-                        })
+                                "total_executions": 0,
+                                "fast_path_hits": 0,
+                                "fast_path_ratio": 0.0
+                            })
             );
           }
           json_value

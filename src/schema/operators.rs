@@ -1,12 +1,12 @@
 // src/schema/operators.rs - FIXED operator implementations
 
 use crate::context::sensor;
-use crate::types::{ ActionPayload, IO };
+use crate::types::ActionPayload;
 use crate::utils::current_timestamp;
 use std::sync::atomic::{ AtomicU64, Ordering };
-use std::sync::Mutex;
-use std::collections::HashMap;
-use std::time::{ Duration, Instant };
+use std::sync::Arc;
+use std::time::Duration;
+use serde::{ Deserialize, Serialize };
 use tokio::task::JoinHandle;
 use crate::timekeeper::{ get_timekeeper, TimerRepeat };
 
@@ -14,10 +14,25 @@ use crate::timekeeper::{ get_timekeeper, TimerRepeat };
 // FIXED: THROTTLE OPERATOR WITH PROPER STATE MANAGEMENT
 //=============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ThrottleOperator {
   ms: u64,
+  #[serde(skip)]
+  #[serde(default = "default_atomic_u64")]
   last_execution: AtomicU64,
+}
+
+fn default_atomic_u64() -> AtomicU64 {
+  AtomicU64::new(0)
+}
+
+impl Clone for ThrottleOperator {
+  fn clone(&self) -> Self {
+    ThrottleOperator {
+      ms: self.ms,
+      last_execution: AtomicU64::new(self.last_execution.load(Ordering::Relaxed)),
+    }
+  }
 }
 
 impl ThrottleOperator {
@@ -47,24 +62,46 @@ impl ThrottleOperator {
 // FIXED: DEBOUNCE OPERATOR WITH ACTUAL DELAY
 //=============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DebounceOperator {
   ms: u64,
-  last_call: Mutex<Option<Instant>>,
-  pending_timer: Mutex<Option<JoinHandle<()>>>,
+  #[serde(skip)]
+  #[serde(default = "default_arc_mutex_option_u64")]
+  last_call: Arc<std::sync::Mutex<Option<u64>>>,
+  #[serde(skip)]
+  #[serde(default = "default_arc_mutex_option_join_handle")]
+  pending_timer: Arc<std::sync::Mutex<Option<JoinHandle<()>>>>,
+}
+
+fn default_arc_mutex_option_u64() -> Arc<std::sync::Mutex<Option<u64>>> {
+  Arc::new(std::sync::Mutex::new(None))
+}
+
+fn default_arc_mutex_option_join_handle() -> Arc<std::sync::Mutex<Option<JoinHandle<()>>>> {
+  Arc::new(std::sync::Mutex::new(None))
+}
+
+impl Clone for DebounceOperator {
+  fn clone(&self) -> Self {
+    DebounceOperator {
+      ms: self.ms,
+      last_call: Arc::new(std::sync::Mutex::new(*self.last_call.lock().unwrap())),
+      pending_timer: Arc::new(std::sync::Mutex::new(None)), // Don't clone running timers
+    }
+  }
 }
 
 impl DebounceOperator {
   pub fn new(ms: u64) -> Self {
     Self {
       ms,
-      last_call: Mutex::new(None),
-      pending_timer: Mutex::new(None),
+      last_call: Arc::new(std::sync::Mutex::new(None)),
+      pending_timer: Arc::new(std::sync::Mutex::new(None)),
     }
   }
 
   pub async fn process(&self, payload: ActionPayload) -> OperatorResult {
-    let now = Instant::now();
+    let now = current_timestamp();
 
     // Cancel previous timer if exists
     {
@@ -78,7 +115,7 @@ impl DebounceOperator {
     {
       let mut last_guard = self.last_call.lock().unwrap();
       if let Some(last) = *last_guard {
-        if now.duration_since(last) < Duration::from_millis(self.ms) {
+        if now - last < self.ms {
           *last_guard = Some(now);
           return OperatorResult::Defer(payload, Duration::from_millis(self.ms));
         }
@@ -94,7 +131,7 @@ impl DebounceOperator {
 // FIXED: REQUIRED OPERATOR WITH PROPER VALIDATION
 //=============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequiredOperator {
   non_empty: bool,
 }
@@ -134,29 +171,10 @@ impl RequiredOperator {
 }
 
 //=============================================================================
-// OPERATOR RESULT ENUM
-//=============================================================================
-
-#[derive(Debug)]
-pub enum OperatorResult {
-  Continue(ActionPayload),
-  Block(String),
-  Defer(ActionPayload, Duration),
-  Schedule(ActionPayload, ScheduleConfig),
-}
-
-#[derive(Debug, Clone)]
-pub struct ScheduleConfig {
-  pub delay: Option<u64>,
-  pub interval: Option<u64>,
-  pub repeat: Option<u32>,
-}
-
-//=============================================================================
 // OTHER OPERATORS (EXISTING BUT FIXED)
 //=============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockOperator;
 
 impl BlockOperator {
@@ -169,7 +187,7 @@ impl BlockOperator {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformOperator {
   talent_name: String,
 }
@@ -216,7 +234,7 @@ impl TransformOperator {
 // OPERATOR ENUM
 //=============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operator {
   Block(BlockOperator),
   Throttle(ThrottleOperator),
@@ -260,41 +278,13 @@ impl Operator {
       Operator::DetectChanges(_) => "detect_changes",
     }
   }
-
-  pub fn from_name(name: &str, action: &IO) -> Option<Self> {
-    match name {
-      "block" => Some(Operator::Block(BlockOperator::new())),
-      "throttle" => Some(Operator::Throttle(ThrottleOperator::new(action.throttle.unwrap()))),
-      "debounce" => Some(Operator::Debounce(DebounceOperator::new(action.debounce.unwrap()))),
-      "required" => Some(Operator::Required(RequiredOperator::new())),
-      "schema" => Some(Operator::Schema(SchemaOperator::new(action.schema.as_ref().unwrap()))),
-      "condition" =>
-        Some(Operator::Condition(ConditionOperator::new(action.condition.as_ref().unwrap()))),
-      "selector" =>
-        Some(Operator::Selector(SelectorOperator::new(action.selector.as_ref().unwrap()))),
-      "transform" =>
-        Some(Operator::Transform(TransformOperator::new(action.transform.as_ref().unwrap()))),
-      "schedule" =>
-        Some(
-          Operator::Schedule(
-            ScheduleOperator::new(
-              action.delay,
-              action.interval,
-              action.repeat.as_ref().and_then(|v| v.as_u64().map(|n| n as u32))
-            )
-          )
-        ),
-      "detect_changes" => Some(Operator::DetectChanges(DetectChangesOperator::new())),
-      _ => None,
-    }
-  }
 }
 
 //=============================================================================
 // PLACEHOLDER OPERATORS (TO BE IMPLEMENTED)
 //=============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaOperator {
   schema_name: String,
 }
@@ -312,7 +302,7 @@ impl SchemaOperator {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConditionOperator {
   talent_name: String,
 }
@@ -330,7 +320,7 @@ impl ConditionOperator {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectorOperator {
   talent_name: String,
 }
@@ -348,7 +338,7 @@ impl SelectorOperator {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectChangesOperator;
 
 impl DetectChangesOperator {
@@ -361,9 +351,8 @@ impl DetectChangesOperator {
     OperatorResult::Continue(payload)
   }
 }
-// Replace your ScheduleOperator implementation with this fixed version:
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleOperator {
   delay: Option<u64>,
   interval: Option<u64>,
@@ -381,13 +370,8 @@ impl ScheduleOperator {
     let payload_clone = payload.clone();
     let callback = move || {
       let payload_inner = payload_clone.clone();
-      // FIXED: Return the correct trait object type
       Box::pin(async move {
-        sensor::info(
-          "schedule",
-          &format!("Scheduled execution: {}", payload_inner),
-          true // Force log to show with timestamp
-        );
+        sensor::info("schedule", &format!("Scheduled execution: {}", payload_inner), true);
       }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
     };
 
@@ -403,4 +387,23 @@ impl ScheduleOperator {
 
     OperatorResult::Continue(payload)
   }
+}
+
+//=============================================================================
+// OPERATOR RESULT ENUM
+//=============================================================================
+
+#[derive(Debug)]
+pub enum OperatorResult {
+  Continue(ActionPayload),
+  Block(String),
+  Defer(ActionPayload, Duration),
+  Schedule(ActionPayload, ScheduleConfig),
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduleConfig {
+  pub delay: Option<u64>,
+  pub interval: Option<u64>,
+  pub repeat: Option<u32>,
 }

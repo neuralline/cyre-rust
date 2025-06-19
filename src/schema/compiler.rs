@@ -1,70 +1,55 @@
-// src/schema/compiler.rs - FIXED: Dynamic field processing
-// Only create operators for fields that are actually enabled/configured
+// src/schema/compiler.rs - DYNAMIC FIELD DISCOVERY IN COMPILER
 
 use crate::types::IO;
 use crate::schema::data_definitions::validate_field;
+use crate::schema::operators::*;
 use crate::context::sensor;
-use serde_json::{ Value as JsonValue };
-use std::collections::HashSet;
+use serde_json::Value as JsonValue;
 
-//=============================================================================
-// FIXED: Dynamic Field Discovery - Only Process ENABLED Fields
-//=============================================================================
+/// Dynamic field discovery - done by compiler, not IO struct
+fn get_dynamic_fields(config: &IO) -> Vec<(String, JsonValue)> {
+  let mut fields = Vec::new();
 
-impl IO {
-  /// Extract all fields that have values - NO hardcoded field enumeration
-  pub fn get_set_fields(&self) -> Vec<(String, JsonValue)> {
-    // Use serde serialization for true dynamic field discovery
-    let json_value = match serde_json::to_value(self) {
-      Ok(value) => value,
-      Err(_) => {
-        return Vec::new();
-      }
-    };
-
+  // Use serde serialization for true dynamic field discovery
+  if let Ok(json_value) = serde_json::to_value(config) {
     if let JsonValue::Object(map) = json_value {
-      map
-        .into_iter()
-        .filter(|(k, v)| {
-          // Only include fields with actual values
-          !v.is_null() &&
-            // Skip internal fields
-            !k.starts_with('_') &&
-            // Skip additional_properties HashMap (not a pipeline field)
-            k != "additional_properties" &&
-            // Skip empty collections
-            !(v.is_array() && v.as_array().unwrap().is_empty()) &&
-            !(v.is_object() && v.as_object().unwrap().is_empty()) &&
-            // Skip default string values
-            !(v.is_string() && v.as_str().unwrap().is_empty()) &&
-            // FIXED: Skip false boolean values (they shouldn't create operators)
-            !(v.is_boolean() && v.as_bool().unwrap() == false) &&
-            // Skip zero numeric values
-            !(v.is_number() && v.as_u64().unwrap_or(1) == 0)
-        })
-        .collect()
-    } else {
-      Vec::new()
+      for (key, value) in map {
+        if should_include_field(&key, &value) {
+          fields.push((key, value));
+        }
+      }
     }
+  }
+
+  fields
+}
+
+/// Determine if field should be included in compilation
+fn should_include_field(key: &str, value: &JsonValue) -> bool {
+  // Skip internal fields (starting with _)
+  if key.starts_with('_') {
+    return false;
+  }
+
+  // Only include fields with meaningful values
+  match value {
+    JsonValue::Null => false,
+    JsonValue::Bool(b) => *b, // Include true, skip false
+    JsonValue::String(s) => !s.is_empty(),
+    JsonValue::Number(_) => true,
+    JsonValue::Array(arr) => !arr.is_empty(),
+    JsonValue::Object(obj) => !obj.is_empty(),
   }
 }
 
-//=============================================================================
-// FIXED: Main Compilation Function
-//=============================================================================
-
-/// Dynamic compilation - no hardcoded field knowledge
-/// Uses serde serialization for true field discovery
-fn truly_dynamic_compile(config: &IO) -> CompileResult {
-  let mut pipeline_names = Vec::new();
+/// Dynamic compilation - NO hardcoded field enumeration
+fn dynamic_compile(config: &IO) -> CompileResult {
+  let mut operators = Vec::new();
   let mut errors = Vec::new();
   let mut suggestions = Vec::new();
 
-  // STEP 1: TRULY DYNAMIC field discovery and validation
-  // NO hardcoded if-statements checking specific fields!
-  for (field_name, field_value) in config.get_set_fields() {
-    // Debug log what fields we're actually processing
-
+  // STEP 1: Dynamic field discovery and operator creation
+  for (field_name, field_value) in get_dynamic_fields(config) {
     let result = validate_field(&field_name, &field_value);
 
     if !result.ok {
@@ -76,94 +61,165 @@ fn truly_dynamic_compile(config: &IO) -> CompileResult {
           suggestions.push(format!("Field '{}': {}", field_name, suggestion));
         }
       }
-
-      // Blocking error = stop compilation immediately
       if result.blocking.unwrap_or(false) {
         return CompileResult::failure(errors, suggestions);
       }
     } else {
-      // ✅ VERIFY AND PUSH IN SAME LOOP - No double processing!
-      if let Some(talent_name) = result.talent_name {
-        pipeline_names.push(talent_name);
+      // CREATE OPERATOR INSTANCE directly during compilation
+      if let Some(operator) = create_operator_from_field(&field_name, &field_value, config) {
+        operators.push(operator);
       }
     }
   }
 
-  // If any non-blocking errors occurred, return failure
   if !errors.is_empty() {
     return CompileResult::failure(errors, suggestions);
   }
 
-  // STEP 2: POST-PROCESSING ORDERING - Enforce system architecture
-  let ordered_pipeline = enforce_pipeline_ordering(pipeline_names);
+  // STEP 2: Enforce pipeline ordering
+  let ordered_operators = enforce_operator_ordering(operators);
 
   // STEP 3: Calculate flags
-  let has_fast_path = ordered_pipeline.is_empty();
-  let has_protections = has_protection_operators(&ordered_pipeline);
-  let has_scheduling = has_schedule_operator(&ordered_pipeline);
+  let has_fast_path = ordered_operators.is_empty();
+  let has_protections = has_protection_operators(&ordered_operators);
+  let has_scheduling = has_schedule_operator(&ordered_operators);
 
-  CompileResult::success(ordered_pipeline, has_fast_path, has_protections, has_scheduling)
+  CompileResult::success(ordered_operators, has_fast_path, has_protections, has_scheduling)
 }
 
-//=============================================================================
-// HELPER FUNCTIONS (unchanged)
-//=============================================================================
+/// Create operator instance from field configuration
+fn create_operator_from_field(field: &str, value: &JsonValue, config: &IO) -> Option<Operator> {
+  match field {
+    "block" => {
+      if value.as_bool() == Some(true) { Some(Operator::Block(BlockOperator::new())) } else { None }
+    }
+    "throttle" => {
+      if let Some(ms) = value.as_u64() {
+        if ms > 0 { Some(Operator::Throttle(ThrottleOperator::new(ms))) } else { None }
+      } else {
+        None
+      }
+    }
+    "debounce" => {
+      if let Some(ms) = value.as_u64() {
+        if ms > 0 { Some(Operator::Debounce(DebounceOperator::new(ms))) } else { None }
+      } else {
+        None
+      }
+    }
+    "required" => {
+      if value.as_bool() == Some(true) || value.as_str() == Some("non-empty") {
+        Some(Operator::Required(RequiredOperator::new()))
+      } else {
+        None
+      }
+    }
+    "schema" => {
+      if let Some(schema_str) = value.as_str() {
+        Some(Operator::Schema(SchemaOperator::new(schema_str)))
+      } else {
+        None
+      }
+    }
+    "condition" => {
+      if let Some(condition_str) = value.as_str() {
+        Some(Operator::Condition(ConditionOperator::new(condition_str)))
+      } else {
+        None
+      }
+    }
+    "selector" => {
+      if let Some(selector_str) = value.as_str() {
+        Some(Operator::Selector(SelectorOperator::new(selector_str)))
+      } else {
+        None
+      }
+    }
+    "transform" => {
+      if let Some(transform_str) = value.as_str() {
+        Some(Operator::Transform(TransformOperator::new(transform_str)))
+      } else {
+        None
+      }
+    }
+    "detect_changes" => {
+      if value.as_bool() == Some(true) {
+        Some(Operator::DetectChanges(DetectChangesOperator::new()))
+      } else {
+        None
+      }
+    }
+    // Scheduling fields create single schedule operator
+    "delay" | "interval" | "repeat" => {
+      Some(
+        Operator::Schedule(
+          ScheduleOperator::new(
+            config.delay,
+            config.interval,
+            config.repeat.as_ref().and_then(|v| v.as_u64().map(|n| n as u32))
+          )
+        )
+      )
+    }
+    _ => None,
+  }
+}
 
-fn enforce_pipeline_ordering(mut pipeline_names: Vec<String>) -> Vec<String> {
-  let mut ordered_pipeline = Vec::new();
+/// Enforce operator ordering (Protection → Validation → Processing → Scheduling)
+fn enforce_operator_ordering(operators: Vec<Operator>) -> Vec<Operator> {
+  let mut ordered = Vec::new();
+  let mut remaining = Vec::new();
 
-  // STEP 1: Move protection operators to FRONT (in specific order)
-  let protection_order = ["block", "throttle", "debounce"];
-  for protection_name in &protection_order {
-    if let Some(pos) = pipeline_names.iter().position(|name| name == protection_name) {
-      ordered_pipeline.push(pipeline_names.remove(pos));
+  // STEP 1: Protection operators first
+  for op in operators {
+    match op {
+      Operator::Block(_) | Operator::Throttle(_) | Operator::Debounce(_) => {
+        ordered.push(op);
+      }
+      _ => remaining.push(op),
     }
   }
 
-  // STEP 2: Add validation operators next
-  let validation_order = ["required", "schema"];
-  for validation_name in &validation_order {
-    if let Some(pos) = pipeline_names.iter().position(|name| name == validation_name) {
-      ordered_pipeline.push(pipeline_names.remove(pos));
+  // STEP 2: Validation operators next
+  let mut processing = Vec::new();
+  for op in remaining {
+    match op {
+      Operator::Required(_) | Operator::Schema(_) => {
+        ordered.push(op);
+      }
+      _ => processing.push(op),
     }
   }
 
-  // STEP 3: Keep user order for processing operators (middle section)
-  let scheduling_fields = ["repeat", "interval", "delay"];
-  for name in pipeline_names {
-    if !scheduling_fields.contains(&name.as_str()) {
-      ordered_pipeline.push(name); // Preserve user order
+  // STEP 3: Processing operators (preserve user order)
+  let mut scheduling = Vec::new();
+  for op in processing {
+    match op {
+      Operator::Schedule(_) => scheduling.push(op),
+      _ => ordered.push(op),
     }
   }
 
-  // STEP 4: Replace scheduling fields with single 'schedule' operator at END
-  let has_scheduling = scheduling_fields
+  // STEP 4: Scheduling operators last
+  ordered.extend(scheduling);
+
+  ordered
+}
+
+fn has_protection_operators(operators: &[Operator]) -> bool {
+  operators
     .iter()
-    .any(|field| ordered_pipeline.iter().any(|name| name == field));
-
-  if has_scheduling {
-    ordered_pipeline.push("schedule".to_string()); // Single schedule operator
-  }
-
-  ordered_pipeline
+    .any(|op| matches!(op, Operator::Block(_) | Operator::Throttle(_) | Operator::Debounce(_)))
 }
 
-fn has_protection_operators(pipeline: &[String]) -> bool {
-  pipeline.iter().any(|op| matches!(op.as_str(), "block" | "throttle" | "debounce"))
+fn has_schedule_operator(operators: &[Operator]) -> bool {
+  operators.iter().any(|op| matches!(op, Operator::Schedule(_)))
 }
-
-fn has_schedule_operator(pipeline: &[String]) -> bool {
-  pipeline.iter().any(|op| op == "schedule")
-}
-
-//=============================================================================
-// COMPILATION RESULT TYPES (unchanged)
-//=============================================================================
 
 #[derive(Debug)]
 pub struct CompileResult {
   pub ok: bool,
-  pub pipeline: Vec<String>,
+  pub pipeline: Vec<Operator>,
   pub errors: Vec<String>,
   pub suggestions: Vec<String>,
   pub has_fast_path: bool,
@@ -173,7 +229,7 @@ pub struct CompileResult {
 
 impl CompileResult {
   pub fn success(
-    pipeline: Vec<String>,
+    pipeline: Vec<Operator>,
     has_fast_path: bool,
     has_protections: bool,
     has_scheduling: bool
@@ -202,28 +258,18 @@ impl CompileResult {
   }
 }
 
-//=============================================================================
-// PUBLIC API (unchanged)
-//=============================================================================
-
-/// Main compilation function - processes IO config into string pipeline
+/// Main compilation function
 pub fn compile_pipeline(config: &mut IO) -> CompileResult {
-  let compile_result = truly_dynamic_compile(config);
+  let compile_result = dynamic_compile(config);
 
   if !compile_result.ok {
-    // Log compilation errors via sensor
     for error in &compile_result.errors {
       sensor::error("pipeline_compiler", error, Some("compile_pipeline"), None);
     }
-
-    for suggestion in &compile_result.suggestions {
-      sensor::warn("pipeline_compiler", &format!("Suggestion: {}", suggestion), false);
-    }
-
     return compile_result;
   }
 
-  // SUCCESS: Update config with compilation metadata
+  // SUCCESS: Update config with compiled operators
   config._pipeline = compile_result.pipeline.clone();
   config._has_fast_path = compile_result.has_fast_path;
   config._has_protections = compile_result.has_protections;

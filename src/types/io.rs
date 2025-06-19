@@ -1,7 +1,8 @@
-// src/types/io.rs - Pure interface with zero logic
+// src/types/io.rs - PURE INTERFACE - No state management
 
 use serde::{ Serialize, Deserialize };
 use std::collections::HashMap;
+use crate::schema::operators::Operator;
 
 //=============================================================================
 // SUPPORTING TYPES
@@ -55,10 +56,10 @@ pub enum AuthMode {
 }
 
 //=============================================================================
-// IO CONFIGURATION - PURE INTERFACE
+// IO CONFIGURATION - PURE INTERFACE (NO STATE LOGIC)
 //=============================================================================
 
-/// Pure IO configuration interface - no logic, no flag setting
+/// Pure IO configuration interface - configuration data only
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IO {
   // ===== CORE IDENTIFICATION =====
@@ -71,6 +72,9 @@ pub struct IO {
   pub tags: Vec<String>,
   pub description: Option<String>,
   pub version: Option<String>,
+
+  // ===== DEFAULT PAYLOAD =====
+  pub payload: Option<serde_json::Value>,
 
   // ===== VALIDATION & REQUIREMENTS =====
   pub required: Option<RequiredType>,
@@ -101,11 +105,12 @@ pub struct IO {
   // ===== AUTHENTICATION =====
   pub auth: Option<AuthConfig>,
 
-  // ===== COMPILED FLAGS (SET BY COMPILER, NOT BY INTERFACE) =====
+  // ===== COMPILED FIELDS (DATA ONLY - NO STORAGE LOGIC) =====
   pub _is_blocked: bool,
   pub _block_reason: Option<String>,
   pub _has_fast_path: bool,
-  pub _pipeline: Vec<String>,
+  #[serde(skip)] // Skip serialization for operators
+  pub _pipeline: Vec<Operator>,
   pub _has_protections: bool,
   pub _has_processing: bool,
   pub _has_scheduling: bool,
@@ -139,6 +144,9 @@ impl Default for IO {
       tags: Vec::new(),
       description: None,
       version: None,
+
+      // Default payload
+      payload: None,
 
       // Validation & requirements
       required: None,
@@ -192,7 +200,7 @@ impl Default for IO {
 }
 
 //=============================================================================
-// PURE BUILDER METHODS - NO LOGIC, NO FLAGS
+// BUILDER METHODS - PURE DATA MANIPULATION (NO STORAGE)
 //=============================================================================
 
 impl IO {
@@ -222,6 +230,12 @@ impl IO {
 
   pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
     self.tags.push(tag.into());
+    self
+  }
+
+  // ===== PAYLOAD =====
+  pub fn with_payload(mut self, payload: serde_json::Value) -> Self {
+    self.payload = Some(payload);
     self
   }
 
@@ -334,7 +348,7 @@ impl IO {
 }
 
 //=============================================================================
-// STATIC CONSTRUCTORS
+// STATIC CONSTRUCTORS - CONVENIENCE METHODS
 //=============================================================================
 
 impl IO {
