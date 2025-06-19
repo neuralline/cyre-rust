@@ -1,9 +1,10 @@
-// src/schema/mod.rs - Complete schema module with all submodules
+// src/schema/mod.rs - Complete schema module with separated compilation and execution
 
 // Submodules
 pub mod data_definitions;
 pub mod operators;
-pub mod compile_execute;
+pub mod compiler;
+pub mod executor;
 
 // Re-export data validation functionality
 pub use data_definitions::{
@@ -15,27 +16,19 @@ pub use data_definitions::{
     SCHEDULING_TALENTS,
 };
 
-// Re-export compilation and execution functionality
-pub use compile_execute::{
-    compile_pipeline,
+// Re-export compilation functionality
+pub use compiler::{ compile_pipeline, CompileResult };
+
+// Re-export execution functionality
+pub use executor::{
     execute_pipeline,
+    execute_pipeline_to_response,
+    requires_pipeline_execution,
     PipelineResult,
-    is_fast_path,
-    estimate_operator_count,
-    estimated_performance,
-    ConfigFields,
 };
 
 // Re-export operators functionality
 pub use operators::{
-    PipelineStats,
-    PipelineInfo,
-    get_pipeline_stats,
-    get_pipeline_info,
-    list_compiled_pipelines,
-    Pipeline,
-    OperatorResult,
-    ScheduleConfig,
     // Operator implementations
     Operator,
     BlockOperator,
