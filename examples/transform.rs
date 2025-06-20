@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
       println!("   🔧 PIPELINE PATH: {} operators", compiled_action._pipeline.len());
       for (i, op) in compiled_action._pipeline.iter().enumerate() {
-        println!("     {}. {}", i + 1, op);
+        println!("     {}. {:?}", i + 1, op);
       }
     }
   } else {

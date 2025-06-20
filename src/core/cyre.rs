@@ -200,6 +200,7 @@ impl Cyre {
       );
     }
 
+    // Get mutable action from central state
     let mut action = match state::io::get(action_id) {
       Some(action) => action,
       None => {
@@ -210,13 +211,21 @@ impl Cyre {
       }
     };
 
+    // Execute pipeline
     let processed_payload = if action._has_fast_path {
-      payload // Zero overhead path
+      payload
     } else {
       match execute_pipeline(&mut action, payload).await {
-        Ok(PipelineResult::Continue(processed)) => processed, // FIXED: Add PipelineResult import
+        Ok(PipelineResult::Continue(processed)) => processed,
         Ok(PipelineResult::Block(reason)) => {
-          return self.templates.error_with_message(reason.clone(), Some(reason));
+          return CyreResponse {
+            ok: false,
+            payload: JsonValue::Null,
+            message: reason,
+            error: Some("blocked".to_string()),
+            timestamp: current_timestamp(),
+            metadata: None,
+          };
         }
         Ok(PipelineResult::Schedule) => {
           return self.templates.success_with_payload(
@@ -230,6 +239,7 @@ impl Cyre {
       }
     };
 
+    // Get handler
     let handler = match state::subscribers::get(action_id) {
       Some(subscriber) => subscriber,
       None => {
@@ -240,8 +250,58 @@ impl Cyre {
       }
     };
 
+    // EXECUTE HANDLER - Simple, no panic catching
     let response = (handler.handler)(processed_payload).await;
+    let now = current_timestamp();
 
+    // UPDATE IO STATE AFTER EXECUTION
+    if response.ok {
+      // Success: Update _last_exec_time and other fields
+      let updated_action = IO {
+        _last_exec_time: Some(now),
+        timestamp: Some(now),
+        _execution_count: action._execution_count + 1,
+        ..action
+      };
+
+      if let Err(e) = state::io::set(action_id.to_string(), updated_action) {
+        sensor::error("cyre", &format!("Failed to update action state: {}", e), Some("call"), None);
+      }
+    } else {
+      // Error: DON'T update _last_exec_time (preserves throttle behavior)
+      let updated_action = IO {
+        timestamp: Some(now),
+        _execution_count: action._execution_count + 1,
+        ..action
+      };
+
+      if let Err(e) = state::io::set(action_id.to_string(), updated_action) {
+        sensor::error(
+          "cyre",
+          &format!("Failed to update action state after error: {}", e),
+          Some("call"),
+          None
+        );
+      }
+    }
+
+    // CHECK FOR INTRALINK - Simple detection
+    if let Some(id_value) = response.payload.get("id") {
+      if let Some(intra_id) = id_value.as_str() {
+        if !intra_id.is_empty() {
+          // Get intralink payload or use empty object
+          let intra_payload = response.payload
+            .get("payload")
+            .cloned()
+            .unwrap_or(json!({}));
+
+          // Simple call - no complications
+          return Box::pin(self.call(intra_id, intra_payload)).await;
+        }
+      }
+    }
+
+    // Return original response if no intralink
     response
   }
 

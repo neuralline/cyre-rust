@@ -1,10 +1,10 @@
-// File location: src/schema/executor.rs
+// src/schema/executor.rs - FIXED executor with action_id parameter
 use crate::types::{ IO, ActionPayload, CyreResponse };
 use crate::schema::operators::OperatorResult;
 use crate::utils::current_timestamp;
 use serde_json::{ Value as JsonValue, json };
 
-/// Main execution function - ULTRA HOT PATH
+/// FIXED: Main execution function that passes action_id to operators
 pub async fn execute_pipeline(
   action: &IO,
   payload: ActionPayload
@@ -15,10 +15,11 @@ pub async fn execute_pipeline(
   }
 
   let mut current_payload = payload;
+  let action_id = &action.id; // Get action ID for operators
 
-  // DIRECT ITERATION - no string matching, no operator creation
+  // FIXED: Execute operators with action_id parameter
   for operator in &action._pipeline {
-    match operator.process(current_payload).await {
+    match operator.process(action_id, current_payload).await {
       OperatorResult::Continue(payload) => {
         current_payload = payload;
       }
@@ -28,8 +29,9 @@ pub async fn execute_pipeline(
       OperatorResult::Schedule(_, _) => {
         return Ok(PipelineResult::Schedule);
       }
-      OperatorResult::Defer(payload, _duration) => {
-        // Handle defer if needed
+      OperatorResult::Defer(payload, duration) => {
+        // For debounce: wait for the specified duration then continue
+        tokio::time::sleep(duration).await;
         current_payload = payload;
       }
     }

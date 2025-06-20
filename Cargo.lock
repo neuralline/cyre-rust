@@ -315,6 +315,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "likely_stable",
+ "once_cell",
  "parking_lot",
  "rand",
  "serde",
