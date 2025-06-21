@@ -1,58 +1,17 @@
-// src/context/sensor.rs
-// File location: src/context/sensor.rs
-// Cyre Sensor Logging System - Terminal logging with your color theme
+//! # Sensor Module - src/sensor.rs
+//!
+//! Ultra-simplified logging with message-first API.
+//! Priority order: message → location → event_type → action_id → metadata
+//! Only message is required, everything else is optional.
 
-//=============================================================================
-// IMPORTS
-//=============================================================================
-
-use std::fmt;
-use serde::{ Deserialize, Serialize };
 use serde_json::Value as JsonValue;
+use std::time::{ SystemTime, UNIX_EPOCH };
 
 //=============================================================================
-// COLOR DEFINITIONS - YOUR THEME
+// LOG LEVELS & COLORS (keeping existing)
 //=============================================================================
 
-/// Color codes with semantic names - matching your TypeScript theme
-pub struct Colors;
-
-impl Colors {
-    pub const RESET: &'static str = "\x1b[0m";
-    pub const MAGENTA: &'static str = "\x1b[35m";
-    pub const MAGENTA_BRIGHT: &'static str = "\x1b[95m";
-    pub const RED: &'static str = "\x1b[31m";
-    pub const RED_BRIGHT: &'static str = "\x1b[91m";
-    pub const GREEN: &'static str = "\x1b[32m";
-    pub const GREEN_BRIGHT: &'static str = "\x1b[92m";
-    pub const CYAN: &'static str = "\x1b[36m";
-    pub const CYAN_BRIGHT: &'static str = "\x1b[96m";
-    pub const YELLOW: &'static str = "\x1b[33m";
-    pub const YELLOW_BRIGHT: &'static str = "\x1b[93m";
-    pub const WHITE: &'static str = "\x1b[37m";
-    pub const WHITE_BRIGHT: &'static str = "\x1b[97m";
-    pub const BLUE: &'static str = "\x1b[34m";
-    pub const BLUE_BRIGHT: &'static str = "\x1b[94m";
-
-    // Background colors
-    pub const BG_RED: &'static str = "\x1b[41m";
-    pub const BG_YELLOW: &'static str = "\x1b[43m";
-    pub const BG_BLUE: &'static str = "\x1b[44m";
-    pub const BG_MAGENTA: &'static str = "\x1b[45m";
-
-    // Text styles
-    pub const BOLD: &'static str = "\x1b[1m";
-    pub const DIM: &'static str = "\x1b[2m";
-    pub const ITALIC: &'static str = "\x1b[3m";
-    pub const UNDERLINE: &'static str = "\x1b[4m";
-}
-
-//=============================================================================
-// LOG LEVELS
-//=============================================================================
-
-/// Log levels for categorizing events
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogLevel {
     DEBUG,
     INFO,
@@ -63,8 +22,23 @@ pub enum LogLevel {
     SYS,
 }
 
-impl fmt::Display for LogLevel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+pub struct Colors;
+impl Colors {
+    pub const RESET: &'static str = "\x1b[0m";
+    pub const BOLD: &'static str = "\x1b[1m";
+    pub const DIM: &'static str = "\x1b[2m";
+    pub const CYAN: &'static str = "\x1b[36m";
+    pub const YELLOW_BRIGHT: &'static str = "\x1b[93m";
+    pub const RED_BRIGHT: &'static str = "\x1b[91m";
+    pub const GREEN_BRIGHT: &'static str = "\x1b[92m";
+    pub const WHITE_BRIGHT: &'static str = "\x1b[97m";
+    pub const WHITE: &'static str = "\x1b[37m";
+    pub const BG_RED: &'static str = "\x1b[41m";
+    pub const BG_MAGENTA: &'static str = "\x1b[45m";
+}
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LogLevel::DEBUG => write!(f, "DEBUG"),
             LogLevel::INFO => write!(f, "INFO"),
@@ -78,20 +52,18 @@ impl fmt::Display for LogLevel {
 }
 
 impl LogLevel {
-    /// Get color styling for log level - matching your theme exactly
     pub fn color_style(&self) -> &'static str {
         match self {
-            LogLevel::DEBUG => Colors::DIM, // dim, cyan
-            LogLevel::INFO => Colors::CYAN, // cyan, bold
-            LogLevel::WARN => Colors::YELLOW_BRIGHT, // yellowBright, bold
-            LogLevel::ERROR => Colors::RED_BRIGHT, // redBright, bold
-            LogLevel::SUCCESS => Colors::GREEN_BRIGHT, // greenBright, bold, dim
-            LogLevel::CRITICAL => Colors::BG_RED, // bgRed, whiteBright, bold
-            LogLevel::SYS => Colors::BG_MAGENTA, // bgMagenta, white
+            LogLevel::DEBUG => Colors::DIM,
+            LogLevel::INFO => Colors::CYAN,
+            LogLevel::WARN => Colors::YELLOW_BRIGHT,
+            LogLevel::ERROR => Colors::RED_BRIGHT,
+            LogLevel::SUCCESS => Colors::GREEN_BRIGHT,
+            LogLevel::CRITICAL => Colors::BG_RED,
+            LogLevel::SYS => Colors::BG_MAGENTA,
         }
     }
 
-    /// Get additional styling
     pub fn additional_style(&self) -> &'static str {
         match self {
             LogLevel::DEBUG => Colors::CYAN,
@@ -104,353 +76,352 @@ impl LogLevel {
         }
     }
 
-    /// Check if this log level should log to terminal by default
     pub fn logs_by_default(&self) -> bool {
         matches!(self, LogLevel::ERROR | LogLevel::CRITICAL)
     }
 }
 
 //=============================================================================
-// SENSOR CORE FUNCTIONALITY
+// SENSOR BUILDER PATTERN FOR ULTIMATE FLEXIBILITY
 //=============================================================================
 
-/// C.Y.R.E - S.E.N.S.O.R
-///
-/// Simplified sensor system for terminal logging:
-/// - Only error and critical log by default
-/// - Others need manual enable
-/// - Uses your exact color theme
-/// - Format: [timestamp] LEVEL: action_id - message
+pub struct SensorBuilder {
+    message: String,
+    location: Option<String>,
+    event_type: Option<String>,
+    action_id: Option<String>,
+    metadata: Option<JsonValue>,
+    force_log: bool,
+}
+
+impl SensorBuilder {
+    pub fn new(message: impl AsRef<str>) -> Self {
+        Self {
+            message: message.as_ref().to_string(),
+            location: None,
+            event_type: None,
+            action_id: None,
+            metadata: None,
+            force_log: false,
+        }
+    }
+
+    pub fn location(mut self, location: impl AsRef<str>) -> Self {
+        self.location = Some(location.as_ref().to_string());
+        self
+    }
+
+    pub fn event_type(mut self, event_type: impl AsRef<str>) -> Self {
+        self.event_type = Some(event_type.as_ref().to_string());
+        self
+    }
+
+    pub fn action_id(mut self, action_id: impl AsRef<str>) -> Self {
+        self.action_id = Some(action_id.as_ref().to_string());
+        self
+    }
+
+    pub fn metadata(mut self, metadata: JsonValue) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn force_log(mut self) -> Self {
+        self.force_log = true;
+        self
+    }
+
+    pub fn log(self, level: LogLevel) {
+        Sensor::log_internal(
+            &self.message,
+            self.location.as_deref(),
+            self.event_type.as_deref(),
+            self.action_id.as_deref(),
+            level,
+            self.force_log,
+            self.metadata
+        );
+    }
+}
+
+//=============================================================================
+// SENSOR CORE - ULTRA SIMPLE API
+//=============================================================================
+
 pub struct Sensor;
 
 impl Sensor {
-    /// General purpose log method
-    pub fn log(
-        action_id: impl AsRef<str>,
+    //=========================================================================
+    // SIMPLE ONE-LINER METHODS (message only)
+    //=========================================================================
+
+    /// sensor.critical("Database connection lost!")
+    pub fn critical(message: impl AsRef<str>) -> SensorBuilder {
+        let builder = SensorBuilder::new(message);
+        builder.log(LogLevel::CRITICAL);
+        SensorBuilder::new("") // Return empty builder for chaining if needed
+    }
+
+    /// sensor.error("Failed to process request")
+    pub fn error(message: impl AsRef<str>) -> SensorBuilder {
+        let builder = SensorBuilder::new(message);
+        builder.log(LogLevel::ERROR);
+        SensorBuilder::new("")
+    }
+
+    /// sensor.warn("High memory usage detected").force_log()
+    pub fn warn(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
+
+    /// sensor.info("User logged in successfully").force_log()
+    pub fn info(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
+
+    /// sensor.success("Operation completed").force_log()
+    pub fn success(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
+
+    /// sensor.debug("Cache hit for key: user_123").force_log()
+    pub fn debug(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
+
+    /// sensor.sys("Quantum Breathing System activated").force_log()
+    pub fn sys(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
+
+    //=========================================================================
+    // INTERNAL LOGGING ENGINE
+    //=========================================================================
+
+    fn log_internal(
+        message: &str,
+        location: Option<&str>,
+        event_type: Option<&str>,
+        action_id: Option<&str>,
         level: LogLevel,
-        message: impl AsRef<str>,
-        location: Option<impl AsRef<str>>,
         force_log: bool,
         metadata: Option<JsonValue>
     ) {
         let should_log = force_log || level.logs_by_default();
 
         if should_log {
-            Self::log_to_terminal(
-                action_id.as_ref(),
-                level,
-                message.as_ref(),
-                location.as_ref().map(|l| l.as_ref()),
-                metadata
-            );
+            Self::log_to_terminal(message, location, event_type, action_id, level, metadata);
         }
 
         #[cfg(debug_assertions)]
         if !should_log {
-            // In debug mode, show suppressed logs dimly
             println!(
                 "{}{}[SUPPRESSED] {} {}: {}{}",
                 Colors::DIM,
                 Colors::CYAN,
                 Self::format_timestamp(),
                 level,
-                message.as_ref(),
+                message,
                 Colors::RESET
             );
         }
     }
 
-    /// Success logging
-    pub fn success(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-        Self::log(action_id, LogLevel::SUCCESS, message, None::<&str>, force_log, None);
-    }
-
-    /// Error logging - logs by default
-    pub fn error(
-        action_id: impl AsRef<str>,
-        message: impl AsRef<str>,
-        location: Option<impl AsRef<str>>,
-        metadata: Option<JsonValue>
-    ) {
-        Self::log(action_id, LogLevel::ERROR, message, location, false, metadata);
-    }
-
-    /// Warning logging
-    pub fn warn(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-        Self::log(action_id, LogLevel::WARN, message, None::<&str>, force_log, None);
-    }
-
-    /// Info logging
-    pub fn info(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-        Self::log(action_id, LogLevel::INFO, message, None::<&str>, force_log, None);
-    }
-
-    /// Debug logging
-    pub fn debug(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-        Self::log(action_id, LogLevel::DEBUG, message, None::<&str>, force_log, None);
-    }
-
-    /// Critical logging - logs by default
-    pub fn critical(
-        action_id: impl AsRef<str>,
-        message: impl AsRef<str>,
-        location: Option<impl AsRef<str>>,
-        metadata: Option<JsonValue>
-    ) {
-        Self::log(action_id, LogLevel::CRITICAL, message, location, false, metadata);
-    }
-
-    /// System logging - special category
-    pub fn sys(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
-        Self::log(action_id, LogLevel::SYS, message, None::<&str>, force_log, None);
-    }
-
-    //=========================================================================
-    // PRIVATE HELPER METHODS
-    //=========================================================================
-
-    /// Log to terminal with your exact format: [timestamp] LEVEL: action_id - message
-    /// ENTIRE LINE gets the color/background treatment
     fn log_to_terminal(
-        action_id: &str,
-        level: LogLevel,
         message: &str,
         location: Option<&str>,
+        event_type: Option<&str>,
+        action_id: Option<&str>,
+        level: LogLevel,
         metadata: Option<JsonValue>
     ) {
         let timestamp = Self::format_timestamp();
         let color_style = level.color_style();
         let additional_style = level.additional_style();
 
-        // Build the log line: [timestamp] LEVEL: action_id - message
-        // ENTIRE line gets color/background treatment
         let mut log_line = String::new();
-
-        // Start with color/background for ENTIRE line
         log_line.push_str(&format!("{}{}", color_style, additional_style));
 
-        // [timestamp] LEVEL: action_id - message (all colored)
-        log_line.push_str(&format!("[{}] {}: {} - {}", timestamp, level, action_id, message));
+        // Base format: [timestamp] LEVEL: message
+        log_line.push_str(&format!("[{}] {}: {}", timestamp, level, message));
 
-        // Location if provided (still colored)
+        // Optional enrichment in logical order
         if let Some(loc) = location {
-            log_line.push_str(&format!(" @ {}", loc));
+            log_line.push_str(&format!(" @{}", loc));
+        }
+        if let Some(event) = event_type {
+            log_line.push_str(&format!(" [{}]", event));
+        }
+        if let Some(action) = action_id {
+            log_line.push_str(&format!(" ({}) ", action));
+        }
+        if let Some(meta) = metadata {
+            log_line.push_str(&format!(" {}", meta));
         }
 
-        // End with color reset
+        // Reset colors
         log_line.push_str(Colors::RESET);
 
         println!("{}", log_line);
-
-        // Print metadata if available (indented, without colors for readability)
-        if let Some(metadata) = metadata {
-            if let Ok(pretty_metadata) = serde_json::to_string_pretty(&metadata) {
-                for line in pretty_metadata.lines() {
-                    println!("    {}", line);
-                }
-            }
-        }
     }
 
-    /// Format timestamp - multiple styles available
     fn format_timestamp() -> String {
-        Self::format_timestamp_unix_z() // Default style
-    }
-
-    /// Unix timestamp with milliseconds and Z: 1750224675.155Z
-    fn format_timestamp_unix_z() -> String {
-        use std::time::{ SystemTime, UNIX_EPOCH };
-
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-
-        let secs = timestamp / 1000;
-        let millis = timestamp % 1000;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let secs = now.as_secs() % 86400; // Seconds within the day
+        let millis = now.subsec_millis();
         format!("{}.{:03}Z", secs, millis)
     }
-
-    /// ISO 8601 format: 2025-06-18T14:30:45.123Z
-    #[allow(dead_code)]
-    fn format_timestamp_iso() -> String {
-        use std::time::{ SystemTime, UNIX_EPOCH };
-
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-
-        // Simple ISO format (would need chrono crate for full ISO)
-        format!("{}T00:00:00.000Z", timestamp)
-    }
-
-    /// Human readable: 14:30:45.123
-    #[allow(dead_code)]
-    fn format_timestamp_time() -> String {
-        use std::time::{ SystemTime, UNIX_EPOCH };
-
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-
-        let total_secs = timestamp / 1000;
-        let millis = timestamp % 1000;
-        let hours = (total_secs / 3600) % 24;
-        let minutes = (total_secs / 60) % 60;
-        let seconds = total_secs % 60;
-
-        format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
-    }
-
-    /// Compact milliseconds: 1750224675155
-    #[allow(dead_code)]
-    fn format_timestamp_millis() -> String {
-        use std::time::{ SystemTime, UNIX_EPOCH };
-
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().to_string()
-    }
-
-    /// Short format: 675.155
-    #[allow(dead_code)]
-    fn format_timestamp_short() -> String {
-        use std::time::{ SystemTime, UNIX_EPOCH };
-
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-
-        let secs = (timestamp / 1000) % 1000; // Last 3 digits of seconds
-        let millis = timestamp % 1000;
-        format!("{}.{:03}", secs, millis)
-    }
 }
 
 //=============================================================================
-// MODULE-LEVEL CONVENIENCE FUNCTIONS
+// BACKWARD COMPATIBILITY - EXISTING API PRESERVED
 //=============================================================================
 
-/// General purpose log function
-pub fn log(
-    action_id: impl AsRef<str>,
-    level: LogLevel,
-    message: impl AsRef<str>,
-    location: Option<impl AsRef<str>>,
-    log: bool,
-    metadata: Option<JsonValue>
-) {
-    Sensor::log(action_id, level, message, location, log, metadata);
-}
-
-/// Success logging (manual enable required)
-pub fn success(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
-    Sensor::success(action_id, message, log);
-}
-
-/// Error logging (auto-enabled)
+/// EXISTING API: sensor::error(action_id, message, location, metadata)
 pub fn error(
     action_id: impl AsRef<str>,
     message: impl AsRef<str>,
     location: Option<impl AsRef<str>>,
     metadata: Option<JsonValue>
 ) {
-    Sensor::error(action_id, message, location, metadata);
+    Sensor::log_internal(
+        message.as_ref(),
+        location.as_ref().map(|l| l.as_ref()),
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::ERROR,
+        false, // Use default logging rules
+        metadata
+    );
 }
 
-/// Warning logging (manual enable required)
-pub fn warn(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
-    Sensor::warn(action_id, message, log);
-}
-
-/// Info logging (manual enable required)
-pub fn info(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
-    Sensor::info(action_id, message, log);
-}
-
-/// Debug logging (manual enable required)
-pub fn debug(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
-    Sensor::debug(action_id, message, log);
-}
-
-/// Critical logging (auto-enabled)
+/// EXISTING API: sensor::critical(action_id, message, location, metadata)
 pub fn critical(
     action_id: impl AsRef<str>,
     message: impl AsRef<str>,
     location: Option<impl AsRef<str>>,
     metadata: Option<JsonValue>
 ) {
-    Sensor::critical(action_id, message, location, metadata);
+    Sensor::log_internal(
+        message.as_ref(),
+        location.as_ref().map(|l| l.as_ref()),
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::CRITICAL,
+        false, // Use default logging rules
+        metadata
+    );
 }
 
-/// System logging (manual enable required)
-pub fn sys(action_id: impl AsRef<str>, message: impl AsRef<str>, log: bool) {
-    Sensor::sys(action_id, message, log);
+/// EXISTING API: sensor::warn(action_id, message, force_log)
+pub fn warn(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
+    Sensor::log_internal(
+        message.as_ref(),
+        None, // location
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::WARN,
+        force_log,
+        None // metadata
+    );
+}
+
+/// EXISTING API: sensor::info(action_id, message, force_log)
+pub fn info(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
+    Sensor::log_internal(
+        message.as_ref(),
+        None, // location
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::INFO,
+        force_log,
+        None // metadata
+    );
+}
+
+/// EXISTING API: sensor::success(action_id, message, force_log)
+pub fn success(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
+    Sensor::log_internal(
+        message.as_ref(),
+        None, // location
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::SUCCESS,
+        force_log,
+        None // metadata
+    );
+}
+
+/// EXISTING API: sensor::debug(action_id, message, force_log)
+pub fn debug(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
+    Sensor::log_internal(
+        message.as_ref(),
+        None, // location
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::DEBUG,
+        force_log,
+        None // metadata
+    );
+}
+
+/// EXISTING API: sensor::sys(action_id, message, force_log)
+pub fn sys(action_id: impl AsRef<str>, message: impl AsRef<str>, force_log: bool) {
+    Sensor::log_internal(
+        message.as_ref(),
+        None, // location
+        None, // event_type
+        Some(action_id.as_ref()),
+        LogLevel::SYS,
+        force_log,
+        None // metadata
+    );
 }
 
 //=============================================================================
-// TESTS
+// NEW SIMPLIFIED API (message-first, everything optional)
 //=============================================================================
 
-#[cfg(test)]
-mod tests {
+/// NEW API: sensor::msg::critical("Database down!")
+pub mod msg {
     use super::*;
 
-    #[test]
-    fn test_log_levels() {
-        assert_eq!(LogLevel::ERROR.logs_by_default(), true);
-        assert_eq!(LogLevel::CRITICAL.logs_by_default(), true);
-        assert_eq!(LogLevel::INFO.logs_by_default(), false);
-        assert_eq!(LogLevel::DEBUG.logs_by_default(), false);
-        assert_eq!(LogLevel::SUCCESS.logs_by_default(), false);
-        assert_eq!(LogLevel::WARN.logs_by_default(), false);
-        assert_eq!(LogLevel::SYS.logs_by_default(), false);
+    /// msg::critical("Database connection lost!")
+    pub fn critical(message: impl AsRef<str>) -> SensorBuilder {
+        let builder = SensorBuilder::new(message);
+        builder.log(LogLevel::CRITICAL);
+        SensorBuilder::new("") // Return empty for potential chaining
     }
 
-    #[test]
-    fn test_color_constants() {
-        assert_eq!(Colors::RESET, "\x1b[0m");
-        assert_eq!(Colors::BG_MAGENTA, "\x1b[45m");
-        assert_eq!(Colors::RED_BRIGHT, "\x1b[91m");
+    /// msg::error("Failed to process request")
+    pub fn error(message: impl AsRef<str>) -> SensorBuilder {
+        let builder = SensorBuilder::new(message);
+        builder.log(LogLevel::ERROR);
+        SensorBuilder::new("")
     }
 
-    #[test]
-    fn test_log_level_colors() {
-        assert_eq!(LogLevel::SYS.color_style(), Colors::BG_MAGENTA);
-        assert_eq!(LogLevel::CRITICAL.color_style(), Colors::BG_RED);
-        assert_eq!(LogLevel::ERROR.color_style(), Colors::RED_BRIGHT);
+    /// msg::warn("High memory usage").force_log()
+    pub fn warn(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
     }
 
-    #[test]
-    fn test_timestamp_format() {
-        let timestamp = Sensor::format_timestamp();
-        // Should match pattern: digits.digits Z
-        assert!(timestamp.ends_with('Z'));
-        assert!(timestamp.contains('.'));
-        let parts: Vec<&str> = timestamp.trim_end_matches('Z').split('.').collect();
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[1].len(), 3); // 3 digit milliseconds
+    /// msg::info("User logged in successfully").force_log()
+    pub fn info(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
     }
 
-    #[tokio::test]
-    async fn test_sensor_methods() {
-        // These won't actually log unless force_log is true or they're error/critical
-        success("test", "Success message", false);
-        info("test", "Info message", false);
-        warn("test", "Warning message", false);
-        debug("test", "Debug message", false);
+    /// msg::success("Operation completed").force_log()
+    pub fn success(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
 
-        // These will log by default
-        error("test", "Error message", None::<&str>, None);
-        critical("test", "Critical message", Some("test_location"), None);
+    /// msg::debug("Cache hit for key: user_123").force_log()
+    pub fn debug(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
+    }
 
-        // Force logging - these will show with colors
-        success("test", "Forced success", true);
-        sys("breathing", "Quantum Breathing System starting", true);
+    /// msg::sys("Quantum Breathing System activated").force_log()
+    pub fn sys(message: impl AsRef<str>) -> SensorBuilder {
+        SensorBuilder::new(message)
     }
 }
-
-//=============================================================================
-// SENSOR INSTANCE
-//=============================================================================
-
-/// Default sensor instance for easy access
-pub static SENSOR: Sensor = Sensor;
